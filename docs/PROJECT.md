@@ -34,19 +34,25 @@ person can be both dentist and admin without logging in twice.
 ## Current status
 
 - **Phase:** 0 — Foundation
-- **Step:** 0.2 — FastAPI backend with `/health`
+- **Step:** 0.3 — Next.js frontend shell
 
 ### What actually exists
 
+**Backend** (`backend/`)
 - A FastAPI app with a single `GET /health` endpoint.
 - Settings loaded from environment variables via pydantic-settings.
 - CORS middleware driven by the `CORS_ORIGINS` setting.
 - One test covering `/health`.
 
-Nothing else. No database, no models, no auth, no frontend, no containers.
+**Frontend** (`frontend/`)
+- A Next.js app with one page: the clinic name and a "System OK" card.
+- The card calls the backend's `/health` from the browser and shows loading, ok, or error.
+- shadcn/ui set up, with `button` and `card` added.
 
-Node.js 24 and Docker Desktop are installed on the development machine, but nothing in the
-repo uses them yet — the frontend arrives in step 0.3 and containers in step 0.4.
+Nothing else. No database, no models, no auth, no routing beyond the one page, no containers.
+
+Docker Desktop is installed but **its engine will not start** — see the WSL blocker in
+[LOG.md](LOG.md). It is not needed until step 0.4.
 
 ## How to run locally
 
@@ -76,6 +82,24 @@ conda run -n dental-clinic python -m pytest
 
 All Python dependencies install into the `dental-clinic` conda env only — never base, never
 global.
+
+### Frontend
+
+Requires Node.js 24.
+
+```bash
+cd frontend
+npm install                        # first time only
+cp .env.local.example .env.local   # sets NEXT_PUBLIC_API_URL
+npm run dev
+```
+
+Open http://localhost:3000. You should see the clinic name and a green **System OK** card.
+If the card is red, the backend isn't running — start it first (above).
+
+**Run both together.** The frontend needs the backend for the health card to go green. Two
+terminals: `uvicorn` on :8000, `npm run dev` on :3000. The backend's `CORS_ORIGINS` already
+allows `http://localhost:3000`.
 
 ## How to deploy
 

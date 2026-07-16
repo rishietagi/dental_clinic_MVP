@@ -26,6 +26,28 @@ from it. If the two run different Node majors, a lockfile or native dependency c
 differently in the container than locally — a failure that surfaces at build or deploy time
 and is painful to trace. Local and container majors stay matched.
 
+## Frontend
+
+| Choice | Version | Why |
+|---|---|---|
+| Next.js | 16.2.10 | The frontend framework. App Router, no `src/` dir, import alias `@/*`. |
+| React | 19.2.4 | Comes with Next 16. |
+| TypeScript | 5.x | Catches bugs at build time. |
+| Tailwind CSS | 4.x | Utility CSS. **v4 is CSS-first** — no `tailwind.config.js`; configured via `@import "tailwindcss"` in `app/globals.css`. |
+| @tailwindcss/postcss | 4.x | The PostCSS plugin Tailwind 4 builds through. |
+| ESLint | 9.x | Linting, via `eslint-config-next`. |
+| shadcn/ui | CLI 4.13.0 | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`. |
+
+**Pulled in by `shadcn init`** — not chosen separately, but they are real dependencies now:
+
+| Choice | Version | Why |
+|---|---|---|
+| @base-ui/react | ^1.6.0 | Unstyled primitives that shadcn components build on. |
+| class-variance-authority | ^0.7.1 | Component style variants. |
+| clsx + tailwind-merge | ^2.1.1 / ^3.6.0 | Conditional class names; back the `cn()` helper in `lib/utils.ts`. |
+| lucide-react | ^1.24.0 | Icon set shadcn components use. |
+| tw-animate-css | ^1.4.0 | Animation utilities for Tailwind 4. |
+
 ## Backend
 
 | Choice | Version | Why |
@@ -60,7 +82,6 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Frontend | Next.js + TypeScript + Tailwind + shadcn/ui — on Node 24 | Step 0.3 |
 | Containers | Docker + Docker Compose — frontend image `node:24-alpine`, backend `python:3.12-slim` | Step 0.4 |
 | Proxy | Caddy | Step 0.4 |
 | Database | PostgreSQL (managed) | Step 0.5 |
