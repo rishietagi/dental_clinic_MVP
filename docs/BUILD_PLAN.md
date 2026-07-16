@@ -420,103 +420,112 @@ erDiagram
 
 ---
 
-## 10. Build roadmap — step by step, commit after each
+## 10. Build roadmap — local first, deploy when ready
 
-Each step is a **commit-sized, deployable slice**. Push after each. Never skip ahead; never let more than one step be half-done.
+**Phases 0–6 are entirely local.** No VPS, no domain, no cloud bills. Deployment is researched
+and executed in Phase 7, once there's something worth deploying.
 
-### PHASE 0 — Foundation (get deploying before building)
+**Rules that preserve the deploy path (follow from day one):**
+- Docker Compose from the start — local and prod differ by config, not architecture.
+- All config via env vars. Never hardcode `localhost`, ports, or secrets.
+- Seed/fake data only until Phase 7. **No real patient data on a laptop.**
 
-| Step | Deliverable | Commit message |
+### PHASE 0 — Local foundation
+| Step | Deliverable | Commit |
 |---|---|---|
-| 0.1 | Repo init, README, `.gitignore`, `CLAUDE.md` | `chore: initialise repo and project docs` |
-| 0.2 | FastAPI app + `/health` endpoint | `feat: add FastAPI backend with health check` |
+| 0.1 | Repo, docs/, CLAUDE.md, conda env `dental-clinic`, environment.yml | `chore: initialise repo and project docs` |
+| 0.2 | FastAPI + `/health` + tests | `feat: add FastAPI backend with health check` |
 | 0.3 | Next.js + TS + Tailwind + shadcn shell | `feat: scaffold Next.js frontend` |
-| 0.4 | Docker Compose (fe + be + Caddy) running locally | `chore: containerise with docker compose` |
-| 0.5 | Managed Postgres connected, SQLAlchemy + Alembic, first migration | `feat: connect Postgres with Alembic migrations` |
-| 0.6 | **Deploy to VPS, domain + HTTPS live** | `ci: deploy to production VPS with TLS` |
-| 0.7 | GitHub Actions: test + deploy on push to main | `ci: add GitHub Actions pipeline` |
+| 0.4 | Docker Compose: backend, frontend, Caddy on :80 | `chore: containerise with docker compose` |
+| 0.5 | Postgres container + SQLAlchemy + Alembic + empty migration | `feat: add Postgres with Alembic migrations` |
+| 0.6 | GitHub Actions: **tests only, no deploy** | `ci: add test pipeline` |
 
-> **Milestone:** a live HTTPS URL showing a blank shell. *The scariest part is done, in week 1.*
+> Milestone: `docker compose up` → working shell at localhost. Whole stack runs on your machine.
 
 ### PHASE 1 — Auth & roles
-
-| Step | Deliverable | Commit |
-|---|---|---|
-| 1.1 | Managed auth wired (Supabase/Clerk), login page | `feat: add authentication` |
-| 1.2 | `staff_user` model with `roles` array, seed admin | `feat: add staff users and roles` |
+| 1.1 | Managed auth (free Supabase project, hit from localhost), login page | `feat: add authentication` |
+| 1.2 | `staff_user` model, `roles` array, seed admin | `feat: add staff users and roles` |
 | 1.3 | Role guards on API + role-aware nav | `feat: enforce role-based access control` |
-| 1.4 | `audit_log` table + write on mutations | `feat: add audit logging` |
+| 1.4 | `audit_log` table + writes on mutations | `feat: add audit logging` |
 
-> **Milestone:** your mother can log in on the real URL.
+> Auth is the one cloud dependency even in local mode — a free Supabase project's auth API,
+> called from localhost. Free, and it keeps "never self-roll auth" intact.
 
 ### PHASE 2 — Patients
-
-| Step | Deliverable | Commit |
-|---|---|---|
 | 2.1 | `patient` model + migration | `feat: add patient model` |
-| 2.2 | Patient CRUD API + tests | `feat: add patient CRUD endpoints` |
-| 2.3 | Patient list + search by name/phone | `feat: add patient list and search` |
-| 2.4 | Patient profile page + medical-notes banner | `feat: add patient profile view` |
+| 2.2 | CRUD API + tests | `feat: add patient CRUD endpoints` |
+| 2.3 | List + search by name/phone | `feat: add patient list and search` |
+| 2.4 | Profile page + medical-notes banner | `feat: add patient profile view` |
+| 2.5 | Seed script: ~50 fake patients | `chore: add seed data script` |
 
-> **Milestone:** real patient records can be entered. **Start entering real data here** — it makes everything after this real.
+> Milestone: browsable patient records. Seed data only.
 
 ### PHASE 3 — Appointments
-
-| Step | Deliverable | Commit |
-|---|---|---|
 | 3.1 | `appointment` model + migration | `feat: add appointment model` |
-| 3.2 | Booking API + **double-booking prevention at service/DB layer** | `feat: add appointment booking with conflict checks` |
+| 3.2 | Booking API + double-booking prevention at service/DB layer | `feat: add booking with conflict checks` |
 | 3.3 | Day-view calendar | `feat: add day view calendar` |
 | 3.4 | Week view + drag-drop reschedule | `feat: add week view and rescheduling` |
 | 3.5 | Status flow: booked → arrived → done / cancelled / no-show | `feat: add appointment status workflow` |
-| 3.6 | Dashboard v1: today's schedule + arrivals | `feat: add dashboard with today's schedule` |
-
-> **Milestone:** the front desk could run on this. **Begin parallel run with the vendor.**
+| 3.6 | Dashboard v1: today's schedule + arrivals | `feat: add dashboard` |
 
 ### PHASE 4 — Treatments, visits & follow-ups (the core)
-
-| Step | Deliverable | Commit |
-|---|---|---|
 | 4.1 | `treatment_item` list + Settings CRUD | `feat: add treatment catalogue` |
 | 4.2 | `treatment` + `visit` + `procedure_performed` models | `feat: add treatment and visit models` |
 | 4.3 | Visit recording API (auto-creates treatment if new) | `feat: add visit recording endpoints` |
-| 4.4 | Visit record screen for dentist | `feat: add visit record screen` |
+| 4.4 | Visit record screen | `feat: add visit record screen` |
 | 4.5 | Treatment lifecycle: in_progress / completed | `feat: add treatment lifecycle` |
 | 4.6 | **Inline follow-up scheduler from visit screen** | `feat: schedule follow-ups from visit record` |
-| 4.7 | Patient profile → Treatments tab, visits nested | `feat: show treatment history on patient profile` |
-| 4.8 | Dashboard: **open treatments with no next appointment** | `feat: flag open treatments missing follow-ups` |
+| 4.7 | Patient profile → Treatments tab, visits nested | `feat: show treatment history` |
+| 4.8 | Dashboard: open treatments with no next appointment | `feat: flag treatments missing follow-ups` |
 
-> **Milestone:** the clinical loop is complete. This is the phase that makes it *actually dental software*.
+> Milestone: the clinical loop works. This is what makes it dental software.
 
 ### PHASE 5 — Billing
-
-| Step | Deliverable | Commit |
-|---|---|---|
 | 5.1 | `invoice` + `invoice_line` + `payment` models | `feat: add billing models` |
 | 5.2 | Invoice generation from visit procedures | `feat: generate invoices from visits` |
 | 5.3 | Payment capture + outstanding balance | `feat: add payment capture` |
-| 5.4 | Printable receipt on clinic letterhead | `feat: add printable receipts` |
+| 5.4 | Printable receipt | `feat: add printable receipts` |
 | 5.5 | Dashboard: today's collections | `feat: show daily collections` |
 
-> **Milestone:** full front-desk-to-payment loop. **This is when you can seriously consider cutting the vendor.**
-
-### PHASE 6 — Reports & hardening
-
-| Step | Deliverable | Commit |
-|---|---|---|
+### PHASE 6 — Reports & local polish
 | 6.1 | Reports: revenue trend, procedure mix, no-show rate | `feat: add practice reports` |
-| 6.2 | Sentry + UptimeRobot | `chore: add error tracking and uptime monitoring` |
-| 6.3 | **Backup restore drill + documented runbook** | `docs: add backup and restore runbook` |
-| 6.4 | Staging environment | `chore: add staging environment` |
+| 6.2 | Error states, loading states, empty states | `feat: polish UI states` |
+| 6.3 | Demo run: show your mother, collect feedback, fix what's wrong | `fix: address usability feedback` |
 
-> **Milestone:** production-grade. **6.3 is not optional** — see §11.
+> Milestone: feature-complete on localhost. **Demo it to your mother before deploying** —
+> cheaper to fix now than after real data exists.
 
-### PHASE 7 — Optional upgrades (only once live and stable)
-- WhatsApp appointment reminders + follow-up nudges (highest real value)
-- Recall reminders for periodic check-ups
-- Document/X-ray uploads (needs object storage)
+### PHASE 7 — Deployment research & go live 🔬
+The research spike you wanted. Do it *here*, with a real app to size.
 
----
+| 7.1 | **Research spike** — write `docs/DEPLOYMENT_OPTIONS.md` comparing real costs and effort | `docs: add deployment options analysis` |
+| 7.2 | Pick a stack, document the decision + why | `docs: record deployment decision` |
+| 7.3 | Managed Postgres provisioned (India region if residency matters) | — |
+| 7.4 | `docker-compose.prod.yml` + prod Caddyfile | `feat: add production compose config` |
+| 7.5 | Domain + DNS + first manual deploy | — |
+| 7.6 | CI: extend Actions to deploy on push to main | `ci: add deploy pipeline` |
+
+**7.1 should compare, at minimum:**
+- VPS + Docker (Hetzner / DigitalOcean / Lightsail) — cheapest, most ops learning
+- PaaS (Render / Railway / Fly.io) — near-zero ops, ~2× cost
+- Postgres: Supabase vs Neon vs RDS Mumbai — free tiers, egress, India residency
+- Per option: monthly ₹, setup hours, maintenance hours/month, restore story
+
+> Milestone: live on HTTPS. **Parallel run with the vendor starts here.** Real patient data
+> enters *only* after Phase 8.3.
+
+### PHASE 8 — Production hardening (before real patient data)
+| 8.1 | Sentry + UptimeRobot | `chore: add monitoring` |
+| 8.2 | Automated backups configured | `chore: configure automated backups` |
+| 8.3 | **Backup restore drill + `docs/RUNBOOK.md`** | `docs: add backup and restore runbook` |
+| 8.4 | Split Alembic out of auto-deploy into a deliberate manual step | `ci: make migrations manual` |
+| 8.5 | Staging environment | `chore: add staging environment` |
+
+> **8.3 gates real patient data.** Untested backups are decoration. Do not put your
+> mother's patients in here until you have restored a backup and seen the rows.
+
+### PHASE 9 — Optional
+WhatsApp reminders + follow-up nudges · recall reminders · document/X-ray uploads
 
 ## 11. Non-negotiables
 

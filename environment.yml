@@ -1,0 +1,15 @@
+# Conda environment for the dental clinic management system.
+#
+#   conda env create -f environment.yml
+#   conda activate dental-clinic
+#
+# Python deps live in backend/requirements.txt so Docker (step 0.4) can install
+# them without conda.
+name: dental-clinic
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -r backend/requirements.txt
