@@ -10,6 +10,21 @@ installed are listed at the bottom, separately, so this table stays honest.
 |---|---|---|
 | Python | 3.12 | Current stable; matches the `python:3.12-slim` image planned for Docker. |
 | conda | env `dental-clinic` | Isolates project deps from base/global. Reproduced by `environment.yml`. |
+| Node.js | 24.18.0 (npm 11.16.0) | Installed locally for the frontend. See the decision below — the Docker image must match this major. |
+
+### Decision: Node 24, not Node 20
+
+The original step 0.4 brief pinned the frontend image to `node:20-alpine`, but the machine has
+Node 24.18.0 installed (winget package id reads `OpenJS.NodeJS.22`; the binary is the
+authority at v24.18.0). Rather than downgrade, **the project standardises on Node 24** —
+decided 2026-07-17.
+
+**Therefore `frontend/Dockerfile` must use `node:24-alpine`, not `node:20-alpine`.**
+
+Why it matters: the local machine generates `package-lock.json`, and the container installs
+from it. If the two run different Node majors, a lockfile or native dependency can resolve
+differently in the container than locally — a failure that surfaces at build or deploy time
+and is painful to trace. Local and container majors stay matched.
 
 ## Backend
 
@@ -45,8 +60,8 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Frontend | Next.js + TypeScript + Tailwind + shadcn/ui | Step 0.3 |
-| Containers | Docker + Docker Compose | Step 0.4 |
+| Frontend | Next.js + TypeScript + Tailwind + shadcn/ui — on Node 24 | Step 0.3 |
+| Containers | Docker + Docker Compose — frontend image `node:24-alpine`, backend `python:3.12-slim` | Step 0.4 |
 | Proxy | Caddy | Step 0.4 |
 | Database | PostgreSQL (managed) | Step 0.5 |
 | CI | GitHub Actions — tests only | Step 0.6 |

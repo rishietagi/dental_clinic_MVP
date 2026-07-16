@@ -7,7 +7,8 @@ Two computers, 2–3 users. It will hold real patient records and run as a produ
 in parallel with a bought vendor product until it has proved itself.
 
 This document describes **what exists today**. The plan for what comes next lives in
-[BUILD_PLAN.md](BUILD_PLAN.md).
+[BUILD_PLAN.md](BUILD_PLAN.md); the record of what was done and decided along the way is in
+[LOG.md](LOG.md).
 
 ## Scope
 
@@ -43,6 +44,9 @@ person can be both dentist and admin without logging in twice.
 - One test covering `/health`.
 
 Nothing else. No database, no models, no auth, no frontend, no containers.
+
+Node.js 24 and Docker Desktop are installed on the development machine, but nothing in the
+repo uses them yet — the frontend arrives in step 0.3 and containers in step 0.4.
 
 ## How to run locally
 
