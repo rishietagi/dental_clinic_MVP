@@ -1,9 +1,10 @@
 "use client";
 
 // Patient search + results. A search box (debounced) over GET /patients, with a
-// simple Tailwind table of results. Rows are not yet links — the profile page is
-// step 2.4, so we don't fake a link to a route that doesn't exist.
+// simple Tailwind table of results. Each row's name links to the patient's
+// profile at /patients/{id}.
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { Input } from "@/components/ui/input";
@@ -54,7 +55,12 @@ export function PatientList() {
                   {state.data.items.map((p) => (
                     <tr key={p.id} className="border-b last:border-0">
                       <td className="px-3 py-2">
-                        {p.name}
+                        <Link
+                          href={`/patients/${p.id}`}
+                          className="font-medium hover:underline"
+                        >
+                          {p.name}
+                        </Link>
                         {p.archived && (
                           <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                             archived

@@ -92,11 +92,13 @@ contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (
 `auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is the
 first full resource API; **2.3 added `GET /patients` list+search** (plain `ILIKE`, no index yet).
 
-Frontend as of 2.3: the first patient screen `app/patients/` (search box + Tailwind results
-table) and the app's **first in-app navigation** — `next/link` (built into Next; no new dep) via
-the `href`-aware `role-nav`. Patient search reuses the authed browser-fetch pattern
-(`lib/use-patient-search.ts`). Still only shadcn `button`/`card`/`input`/`label` — the results
-table is hand-rolled Tailwind (no table component added).
+Frontend as of 2.4: the patient list `app/patients/` (search box + Tailwind results table) and
+the **profile page** `app/patients/[id]/` — the app's **first dynamic route** — with the
+medical-notes banner. Navigation uses `next/link` (built into Next; no new dep) via the
+`href`-aware `role-nav`; list rows link to profiles. Patient fetches reuse the authed
+browser-fetch pattern (`lib/use-patient-search.ts`, `lib/use-patient.ts`). Still only shadcn
+`button`/`card`/`input`/`label` — tables/banner are hand-rolled Tailwind (no table component
+added).
 
 | Choice | Version | Why |
 |---|---|---|

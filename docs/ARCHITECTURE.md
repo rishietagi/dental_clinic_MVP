@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 2.3.** This describes what is built, not what is planned.
+**Honest to the code as of step 2.4.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -223,6 +223,14 @@ are only returned by `GET /patients/{id}`, never in bulk.
 navigation** — `app/role-nav.tsx` gained an `href` on nav items and a `next/link` "Patients"
 link (nothing used `next/link` before; other nav items remain placeholder spans until their pages
 exist).
+
+`/patients/{id}` (`app/patients/[id]/`, step 2.4) is the **profile page** and the app's first
+**dynamic route**. It fetches the full patient (`lib/use-patient.ts` → `GET /patients/{id}`, the
+one endpoint that returns `medical_notes`) and shows demographics in a `Card` plus the
+**medical-notes banner** — a prominent amber alert that renders *only* when `medical_notes` is
+non-empty (BUILD_PLAN §1: the one diabetic/blood-thinner patient is exactly where it matters).
+Read-only this step; list rows link into it. The id is a **path segment** (allowed — the
+no-id-in-URL rule is about query strings).
 
 ### Seeding (`app/seed.py`)
 

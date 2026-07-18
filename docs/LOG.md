@@ -15,12 +15,11 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1–2.3 done** —
-patient model (2.1), CRUD API (2.2), and **list + search** (2.3: `GET /patients` with name/phone
-search + pagination, the **first frontend patient page** `/patients`, and the app's **first
-in-app navigation** via `next/link`). Next is **step 2.4** (patient profile page + medical-notes
-banner). Still **four migrations** — 2.3 added **no** migration (ILIKE search needs no index at
-clinic scale; pg_trgm is the future escalation if the table grows large).
+**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1–2.4 done** —
+patient model (2.1), CRUD API (2.2), list + search (2.3), and the **profile page** (2.4:
+`/patients/{id}` demographics + the medical-notes banner; list rows now link into it; the app's
+**first dynamic route**). Next is **step 2.5** (seed ~50 fake patients) — the last step of
+Phase 2. Still **four migrations** (2.4 was frontend-only, no backend/API/migration change).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -96,6 +95,55 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 2.4: patient profile page + medical-notes banner
+
+**Status:** complete — frontend-only; lint+build green, route + auth-guard verified. **Browser
+click-through (banner shown/hidden, 404) handed to the user.** For commit.
+
+### Scope decisions (confirmed with user)
+- **Overview only** — demographics + medical-notes banner. **No Treatments/Billing tab shells**
+  (Phases 4–5; no empty placeholders).
+- **Read-only** — display + link list rows to the profile. **No edit/archive/create UI** this
+  step (PATCH/archive API exists from 2.2 but isn't surfaced yet).
+
+### Built (all frontend; backend already had `GET /patients/{id}` from 2.2)
+- `lib/use-patient.ts` (`"use client"`) — single-patient authed fetch (clones the search-hook
+  pattern, no debounce). States `loading | ready | not-found (404) | error`. Returns the FULL
+  record incl. `medical_notes` (only the single-patient endpoint returns that).
+- `app/patients/[id]/page.tsx` — the app's **first dynamic route**. Next 16 `params` is a
+  Promise (`await params`). Id is a **path segment** (allowed; the no-id-in-URL rule is about
+  query strings).
+- `app/patients/[id]/patient-profile.tsx` — Overview `Card` (name, phone, age, DOB, gender;
+  archived marker; "—" for missing) + a **`MedicalNotesBanner`** that renders **only when
+  `medical_notes` is non-empty** (amber/warning styling, alert icon) — the one clinically
+  important element. Back-to-patients link. not-found/error states handled.
+- `app/patients/patient-list.tsx` — each row's name is now a `next/link` to `/patients/{id}`
+  (rows were intentionally non-links in 2.3 "until the profile exists").
+
+### No backend / migration / deps / CI change
+
+### Verified
+- `npm run lint` + `npm run build` green; build shows `/patients/[id]` as a **dynamic route**
+  (`ƒ`) — the app's first.
+- Route + guard: `GET /patients/{id}` with no session → **307 → /login** (proxy guard; route
+  registered/matched).
+- Two test patients created for the browser check (one **with** medical notes: "Diabetic… on
+  blood thinners", one **without**). User confirms the banner shows for the first and is absent
+  for the second, and an unknown id → "Patient not found".
+
+### Watch-out handled
+- `react-hooks/set-state-in-effect` (bit 0.3 and 2.3): the single-patient hook uses the async
+  IIFE pattern (setState inside the async body, guarded by `cancelled`), so it's clean.
+
+### Carried forward → 2.5 (last Phase 2 step)
+- **Seed ~50 fake patients** (a seed script, faker-style) so the list/search/profile have
+  realistic data to browse. Some with `medical_notes` so the banner is visible in the seed set.
+
+### Suggested commit
+`feat: add patient profile view`
 
 ---
 
