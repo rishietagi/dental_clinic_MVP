@@ -19,3 +19,4 @@ class Base(DeclarativeBase):
 from app.models.staff_user import StaffUser  # noqa: E402,F401
 from app.models.audit_log import AuditLog  # noqa: E402,F401
 from app.models.patient import Patient  # noqa: E402,F401
+from app.models.appointment import Appointment  # noqa: E402,F401

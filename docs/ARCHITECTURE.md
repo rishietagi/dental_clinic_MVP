@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 2.5 (Phase 2 complete).** This describes what is built, not what
+**Honest to the code as of step 3.1 (Phase 3 begun).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -159,8 +159,8 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 2.1 there are three models — `staff_user`, `audit_log`, `patient` — plus
-the first `app/services/` module.
+As of 3.1 there are four models — `staff_user`, `audit_log`, `patient`, `appointment` —
+plus the first `app/services/` module.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -190,6 +190,15 @@ the first `app/services/` module.
   (nullable) and computes `age` via a read-only `@property` rather than storing a stale int.
   `medical_notes` is one free-text field (renders as a banner later). `created_at`/`updated_at`
   timestamps. No endpoints yet — CRUD is 2.2.
+- **`app/models/appointment.py`** — `Appointment`, a booked calendar slot (Phase 3, step 3.1).
+  **The schema's first table with foreign keys:** `patient_id → patient.id` (NOT NULL — always
+  belongs to a patient) and `dentist_id → staff_user.id` (nullable — a slot may be unassigned).
+  `treatment_id` is a **bare nullable UUID with no FK yet** — the `treatment` table doesn't exist
+  until Phase 4, so its FK constraint is deferred to 4.2 (a first booking has no treatment; a
+  follow-up does). `start_time` (timestamptz), `duration_min` (default 30), `status` (default
+  `booked` — the transition *workflow* is 3.5, this step is only the column), `reason` (free
+  text), `created_at`/`updated_at`. No `relationship()` navigations yet. No endpoints — booking
+  is 3.2.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend

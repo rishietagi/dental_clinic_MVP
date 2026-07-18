@@ -15,11 +15,18 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 2 IS COMPLETE** (2.1–2.5 done). patient model (2.1), CRUD API (2.2),
-list+search (2.3), profile page + medical-notes banner (2.4), and **~50 fake patients seeded**
-(2.5, `python -m app.seed_patients`). **Next is Phase 3 — Appointments**, starting with **step
-3.1** (`appointment` model + migration). Still **four migrations** (2.5 was a script — no schema
-change). Two seed scripts now: `app.seed` (admin) and `app.seed_patients` (dev patients).
+**Where we are:** **PHASE 3 HAS BEGUN.** Phase 2 is complete (2.1–2.5). **Step 3.1 is done:**
+the `appointment` model + migration `56fda58b828c` (the schema's **first table with foreign
+keys**). **Next is step 3.2** — booking API + double-booking prevention. Now **five migrations**
+(head = `56fda58b828c`). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev
+patients) — no appointment seed yet.
+
+**Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
+`dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` is a
+bare nullable UUID with NO foreign key** — the `treatment` table doesn't exist until Phase 4, so
+its FK constraint is deferred to 4.2. `status` defaults to `booked` (the transition *workflow* is
+3.5); `duration_min` defaults to 30. No `relationship()` navigations, no CHECK/enum on `status`
+yet, no appointment endpoints (that's 3.2).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -83,6 +90,7 @@ the original step instructions say otherwise:
 | **Migrations ship in the image** | — | `alembic upgrade head` runs from the built image, so **rebuild the backend image after adding a migration** before applying — otherwise Alembic uses the image's stale copy and silently no-ops ("already at head"). Generating a migration uses a `-v backend:/app` bind mount so the file lands on the host. | `backend/Dockerfile` |
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
+| **appointment.treatment_id has NO FK yet** | ERD shows `treatment_id FK` | `treatment` doesn't exist until Phase 4. `treatment_id` is a bare **nullable UUID column** now (so 3.2 can reference it and the shape matches the ERD); the actual FK constraint is added in **Phase 4 (4.2)** once `treatment` exists. A test asserts a random `treatment_id` inserts fine (proves the deferral). `patient_id`/`dentist_id` ARE real FKs. | `backend/app/models/appointment.py` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
 **Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
@@ -96,6 +104,69 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.1: appointment model + migration (Phase 3 begins)
+
+**Status:** complete — model + migration + tests, verified against the real Docker Postgres
+(migration up/down, table/FKs inspected, 38 tests pass). For commit. **First table with foreign
+keys** in the schema.
+
+### Scope decisions (confirmed with user — deviations flagged)
+- **`treatment_id`: bare nullable UUID, NO foreign key yet.** `treatment` doesn't exist until
+  Phase 4, so a real FK can't be created without building ahead. Column added now (shape matches
+  ERD, 3.2 can reference it); FK constraint deferred to **4.2**. See the standing-decisions row.
+- **`patient_id` → `patient.id` (NOT NULL)** and **`dentist_id` → `staff_user.id` (nullable)** are
+  **real FK constraints** — the schema's first. `dentist_id` nullable = a slot may be booked
+  before a dentist is assigned.
+- **No `ondelete` cascades** — patients are soft-deleted and staff deactivated (never hard-
+  deleted), so cascade behaviour never triggers. Plain restrict-by-default FKs.
+- **`status` column + default `booked` only** — the transition *workflow* (arrived/done/
+  cancelled/no-show) is **step 3.5**. No CHECK/enum (kept flexible; validated in the API later).
+- **No `relationship()` navigations, no endpoints** — booking API is 3.2.
+
+### Built
+- `app/models/appointment.py` — `Appointment`: `id` UUID PK (`gen_random_uuid()`), `patient_id`
+  (FK→patient, not null), `treatment_id` (nullable UUID, no FK), `dentist_id` (FK→staff_user,
+  nullable), `start_time` (timestamptz, not null), `duration_min` (Integer, default 30), `status`
+  (Text, default `booked`), `reason` (nullable Text), `created_at`/`updated_at` (timestamptz).
+  Registered in `app/models/__init__.py`.
+- `alembic/versions/56fda58b828c_add_appointment.py` — autogenerated, reviewed clean.
+  `down_revision = 7d0a0ba7961b`. Two `ForeignKeyConstraint`s (patient, staff_user), none for
+  `treatment_id`. `updated_at`'s app-level `onupdate` correctly absent from DDL.
+- `tests/test_appointment.py` — all DB-backed (no pure-logic property here), skip-if-no-DB
+  fixture like the other suites: table/columns exist; FK introspection proves patient+dentist FKs
+  and **treatment_id has none**; insert + server defaults (`status=booked`, `duration_min=30`);
+  **patient FK enforced** (bad id → IntegrityError); **treatment_id random id inserts fine**
+  (deferral proven behaviourally). Cleans up appointments before patients (FK order).
+
+### No new deps / env / CI
+SQLAlchemy `ForeignKey`/`Integer` already available. CI's Postgres + `alembic upgrade head` covers
+the new migration and tests automatically.
+
+### Verified (against the real db)
+- Autogenerate detected only `appointment`. `\d appointment` shows the exact columns/types, both
+  FKs (`appointment_patient_id_fkey`, `appointment_dentist_id_fkey`), **no FK on treatment_id**,
+  `duration_min` default 30, `status` default `booked`.
+- Migration up: `7d0a0ba7961b -> 56fda58b828c`. Down/up proven: `downgrade -1` drops the table
+  (psql "did not find any relation"), `upgrade head` recreates it.
+- **38 tests pass** in-container (33 prior + 5 appointment). Host run (no DB): the 5 appointment
+  tests **skip fast** — skip-if-no-DB guard holds.
+
+### Gotcha hit (workflow, not the app)
+Generating the migration via the bind-mount **must run from PowerShell, not the Bash tool.** In
+Git Bash `${PWD}` is `/c/Users/...` (MSYS form), which Docker Desktop does not map to the Windows
+host — the file wrote into the ephemeral `--rm` container and was lost. Re-running the exact same
+command from PowerShell (where `${PWD}` is a real Windows path) persisted the file. Applying
+migrations (no mount) is unaffected.
+
+### Carried forward → 3.2
+- No booking API yet. 3.2 adds create/list appointments + **double-booking prevention at the
+  service/DB layer** (BUILD_PLAN §11 — two PCs will race). `treatment_id` FK still deferred to 4.2.
+
+### Suggested commit
+`feat: add appointment model`
 
 ---
 
