@@ -42,6 +42,10 @@ services:
         # Inlined into the browser bundle at build time. The browser reaches the
         # backend THROUGH Caddy at /api — never a Docker hostname it can't resolve.
         NEXT_PUBLIC_API_URL: http://localhost/api
+        # Supabase Auth — project-specific, so read from the gitignored root .env
+        # (see .env.example) rather than hardcoded here. Also build-time-inlined.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
     depends_on:
       - backend
 

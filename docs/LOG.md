@@ -15,10 +15,11 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 0 is complete** (0.6 done). Next is **Phase 1 — Auth & roles**,
-starting with step 1.1 (managed auth via a free Supabase project, hit from localhost, + a login
-page). Not started. NOTE: Phase 1 is the first step that needs a cloud dependency (Supabase
-auth) even in local mode — confirm the approach with the user before building.
+**Where we are:** **Phase 1 started.** **Step 1.1 is complete** (Supabase Auth + login page,
+login flow only — no backend JWT verification yet). Next is **step 1.2** (`staff_user` model,
+`roles` array, seed admin). The Supabase cloud dependency is live: a free project's auth API,
+hit from localhost. NOTE for 1.2/1.3: the backend does **not** yet verify the Supabase JWT —
+that lands in 1.3 with the API role guards. Do not build ahead.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
@@ -66,6 +67,7 @@ the original step instructions say otherwise:
 | **CLAUDE.md is gitignored** | — | Local-only, not in the repo. A fresh clone won't have it; ask the user for it. | `.gitignore` |
 | **`next.config.ts`, not `.js`** | `next.config.js` in step 0.3 | Next 16 scaffolds a TypeScript config. `output: "standalone"` lives in the `.ts` file. | `frontend/next.config.ts` |
 | **Tailwind 4, not 3** | — | No `tailwind.config.js` exists. v4 is CSS-first: configured in `app/globals.css`. Don't go looking for the JS config. | `docs/TECH_STACK.md` |
+| **`proxy.ts`, not `middleware.ts`** | Supabase docs say `middleware.ts` | Next 16.2 **deprecated** the `middleware` file convention (renamed to `proxy`; same API). Our root file is `frontend/proxy.ts` exporting `proxy()`. The Supabase *helper* is still `lib/supabase/middleware.ts` (`updateSession`) — that name is unaffected. | `frontend/proxy.ts` |
 
 **Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
 2.9.3.0 / kernel 6.18.35.2, Docker engine 29.6.1 (linux, overlayfs), Compose v5.3.0,
@@ -78,6 +80,82 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 1.1: Supabase Auth + login page (Phase 1 begins)
+
+**Status:** complete, verified by-hand in a browser and through the Docker stack, torn down
+clean. For commit.
+
+### Scope decisions (confirmed with user before building)
+- **Provider: Supabase Auth** (over Clerk) — matches BUILD_PLAN/LOG; same vendor can host prod
+  Postgres in Phase 7.
+- **Login flow only.** This step ships: login page, cookie session, sign-out, and a route
+  guard. **No FastAPI JWT verification** — that is 1.3 (API role guards). Deliberately not
+  built ahead. **The backend is untouched this step.**
+- **No roles yet.** 1.1 has no `staff_user` table and no role concept: any Supabase-Auth user
+  who signs in reaches the app. Roles arrive in 1.2/1.3.
+- **User created the Supabase project** (guided step-by-step): free project, Email provider,
+  public sign-ups off, one hand-made test user (`test@clinic.local`, auto-confirmed).
+
+### Built (all frontend)
+- `frontend/lib/supabase/client.ts` — browser client (`createBrowserClient`).
+- `frontend/lib/supabase/server.ts` — server client (`createServerClient`) wired to Next's
+  `cookies()`; `setAll` wrapped in try/catch (server components can read but not write cookies).
+- `frontend/lib/supabase/middleware.ts` — `updateSession()`: refreshes the token via
+  `getUser()` and applies the guard (no user + not `/login` → `/login`; user on `/login` → `/`),
+  copying refreshed cookies onto redirects.
+- `frontend/proxy.ts` — root proxy delegating to `updateSession`, with a `matcher` excluding
+  `_next/*` and static assets. **(Next 16 renamed `middleware.ts` → `proxy.ts`; see the
+  standing-decisions table.)**
+- `frontend/app/login/page.tsx` + `login-form.tsx` — centered Card, email+password, calls
+  `signInWithPassword`, vague "Incorrect email or password." on failure (doesn't leak which),
+  `router.refresh()` + push to `/` on success. No signup/forgot links (staff-only).
+- `frontend/app/page.tsx` — now an **async server component**: reads the user, shows their email
+  + a `SignOutButton`. Still renders the existing `HealthCard`. No role-aware nav (that's 1.3).
+- `frontend/app/sign-out-button.tsx` — client button: `signOut()` → refresh → `/login`.
+- shadcn `input` + `label` added (form needed them; only `button`/`card` existed before).
+
+### Deps added (asked user)
+- `@supabase/supabase-js ^2.110.7`, `@supabase/ssr ^0.12.3` (frontend).
+
+### Env wiring (the build-arg footgun, same as 0.4's `NEXT_PUBLIC_API_URL`)
+- `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — **inlined at BUILD
+  time**, so they must be present during `npm run build`. Added to: `frontend/.env.local` (dev),
+  `frontend/.env.local.example`, `frontend/Dockerfile` (ARG/ENV before build), and
+  `docker-compose.yml` frontend build args via `${...}` interpolation.
+- Project-specific values come from a **new gitignored root `.env`** (documented by a new
+  committed `.env.example`) so nothing project-specific is hardcoded in the committed compose
+  file. Root `.env` was already in `.gitignore`.
+- **Key naming:** Supabase's current key is the **publishable** key (`sb_publishable_…`), the
+  new name for the old "anon" key. The base URL is `https://<ref>.supabase.co` — **not** the
+  `/rest/v1/` REST endpoint (user first pasted that; corrected).
+
+### Verified
+- `npm run lint` clean; `npm run build` clean, TypeScript clean, `.next/standalone/server.js`
+  present. Build shows `/` as `ƒ` (dynamic — reads session), `/login` static, proxy registered.
+- **Guard (dev + Docker):** `GET /` signed-out → **307 → `/login`**; `GET /login` → 200.
+- **Supabase credentials real:** password grant against `…/auth/v1/token` returns a bearer
+  token for `test@clinic.local` (email confirmed). Proves project + key + user.
+- **Full browser loop — user confirmed manually:** redirected to `/login` when signed out →
+  sign in → home shows email + Sign out + green health card → wrong password shows inline error,
+  no crash → reload keeps session → Sign out returns to `/login`.
+- **Docker path:** `docker compose up -d --build` → 4 containers, db healthy. Guard + `/login` +
+  `/api/health` all correct through Caddy on :80. **Build-arg proof:** the Supabase URL is
+  present in a served `/_next/static` JS chunk — confirms it was inlined into the browser
+  bundle. `docker compose down` clean.
+- Login page screenshotted (styled Card, correct fonts).
+
+### Notes for next session
+- **Backend has no auth yet** — no JWT verification, no `Depends` guard. `/api/*` is wide open.
+  1.3 adds verification of the Supabase JWT on the API. Don't assume the API is protected.
+- The middleware **helper** file is `lib/supabase/middleware.ts` (Supabase's name for
+  `updateSession`) — that's fine; only the *root* Next file convention was renamed to `proxy`.
+- Test user creds live only in the gitignored `.env`/`.env.local` and Supabase. Not committed.
+
+### Suggested commit
+`feat: add authentication`
 
 ---
 

@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 0.5.** This describes what is built, not what is planned.
+**Honest to the code as of step 1.1.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -45,7 +45,9 @@ persistence.
    throws, **error** (red). The error state is a real state — the page does not crash when the
    backend is down.
 
-No database is touched and no auth is checked — neither exists yet.
+No database is touched by `/health`, and the **backend** checks no auth (backend auth is 1.3).
+Auth is enforced on the **frontend** by `proxy.ts` before protected pages render — see the
+Authentication section below.
 
 **Under Docker Compose the shape differs slightly:** the browser talks only to Caddy on
 `http://localhost` and calls `http://localhost/api/health`. That is the **same origin** as the
@@ -66,6 +68,47 @@ So: `NEXT_PUBLIC_API_URL` must always be a URL **the browser can reach**, and th
 client-side to match. `NEXT_PUBLIC_*` values are inlined at **build** time, not runtime — step
 0.4's Dockerfile therefore has to pass it as a build arg.
 
+## Authentication (Supabase — step 1.1)
+
+Auth lives entirely in the **frontend/browser layer** for now. The FastAPI backend is not yet
+involved — it does **not** verify the Supabase JWT (that is step 1.3).
+
+```mermaid
+flowchart LR
+    B[Browser] -->|signInWithPassword| SUPA[(Supabase Auth<br/>cloud)]
+    SUPA -->|session cookie| B
+    B -->|every request| PROXY[proxy.ts<br/>updateSession + guard]
+    PROXY -->|no session → /login| LOGIN[/login page/]
+    PROXY -->|session ok| HOME[protected pages]
+    HOME -.->|reads user server-side| SUPA
+```
+
+- **`lib/supabase/client.ts`** — browser client (`createBrowserClient`). Used by the login form
+  and the sign-out button.
+- **`lib/supabase/server.ts`** — server client (`createServerClient`) bound to Next's
+  `cookies()`. Used by server components (e.g. `page.tsx` reads the signed-in user). Its cookie
+  `setAll` is wrapped in try/catch because a Server Component may read but not write cookies.
+- **`lib/supabase/middleware.ts` → `updateSession()`** — the session refresh + route guard,
+  called from `proxy.ts` on every matched request. It calls `getUser()` (which refreshes an
+  expired token), then: no user and not on `/login` → redirect to `/login`; signed-in user on
+  `/login` → redirect to `/`. Refreshed cookies are copied onto redirects so the browser gets
+  the fresh session.
+- **`proxy.ts`** — the root request interceptor. *Next 16 renamed the `middleware` file
+  convention to `proxy`; the API is identical.* Its `matcher` skips `_next/*` and static assets.
+
+**Why the token can't refresh in a Server Component:** server components can read cookies but
+not write them, so a rotated token couldn't be persisted. The proxy runs before the render and
+*can* write cookies — that's why session refresh lives there. This is the standard
+`@supabase/ssr` App Router pattern.
+
+**No roles yet.** There is no `staff_user` table and no role concept in 1.1 — any authenticated
+Supabase user reaches the app. Roles (`staff_user` + `roles` array) come in 1.2, and API-side
+role guards + JWT verification in 1.3. Until then, `/api/*` is unauthenticated.
+
+The two `NEXT_PUBLIC_SUPABASE_*` values are inlined at **build** time (like
+`NEXT_PUBLIC_API_URL`), so they are build args in the Dockerfile and compose file, sourced from
+the gitignored root `.env`.
+
 ## Configuration
 
 All config comes from environment variables, read once at import time by the `Settings` class
@@ -78,6 +121,8 @@ Nothing is hardcoded — local and production will differ by config only.
 | `cors_origins` | `CORS_ORIGINS` | backend | Used — feeds the CORS middleware. Comma-separated. Defaults to `http://localhost:3000`, which is where `next dev` serves. |
 | `database_url` | `DATABASE_URL` | backend | Used — feeds the SQLAlchemy engine (`app/db.py`) and, separately, Alembic (`alembic/env.py`). |
 | — | `NEXT_PUBLIC_API_URL` | frontend | Used — the backend base URL the browser calls. Inlined at **build** time. `http://localhost/api` under Docker (through Caddy); `http://localhost:8000` for by-hand dev. |
+| — | `NEXT_PUBLIC_SUPABASE_URL` | frontend | Used — Supabase project base URL (`https://<ref>.supabase.co`, not the `/rest/v1` endpoint). Inlined at **build** time. |
+| — | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | frontend | Used — Supabase publishable (anon) key, safe in the browser. Inlined at **build** time. For Docker, both Supabase vars come from the gitignored root `.env`. |
 
 `cors_origins` is typed as a `str` and split on commas by the `cors_origins_list` property
 rather than being typed as `list[str]`, because pydantic-settings parses list-typed fields as

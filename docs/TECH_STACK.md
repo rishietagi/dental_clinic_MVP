@@ -36,7 +36,24 @@ and is painful to trace. Local and container majors stay matched.
 | Tailwind CSS | 4.x | Utility CSS. **v4 is CSS-first** — no `tailwind.config.js`; configured via `@import "tailwindcss"` in `app/globals.css`. |
 | @tailwindcss/postcss | 4.x | The PostCSS plugin Tailwind 4 builds through. |
 | ESLint | 9.x | Linting, via `eslint-config-next`. |
-| shadcn/ui | CLI 4.13.0 | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`. |
+| shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`, `input`, `label`. |
+
+### Auth (Supabase) — added step 1.1
+
+| Choice | Version | Why |
+|---|---|---|
+| @supabase/supabase-js | ^2.110.7 | Supabase client SDK. Backs `signInWithPassword`, `signOut`, `getUser`. |
+| @supabase/ssr | ^0.12.3 | Cookie-based session handling for the Next.js App Router — browser + server clients and the `proxy.ts` session refresh. |
+
+Managed auth runs in the **frontend/browser layer** for now. Env vars
+`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (the publishable/anon
+key — safe in the browser) are inlined at **build** time, so they are build args in
+`frontend/Dockerfile` + `docker-compose.yml`, sourced from the gitignored root `.env`. The
+FastAPI backend does **not** yet verify the Supabase JWT — that arrives in step 1.3.
+
+> **Next 16 note:** the request-interception file is `frontend/proxy.ts` (exporting `proxy`),
+> not `middleware.ts`. Next 16.2 deprecated the `middleware` convention and renamed it to
+> `proxy` (identical API). Supabase's own docs still say `middleware` — we use `proxy`.
 
 **Pulled in by `shadcn init`** — not chosen separately, but they are real dependencies now:
 
@@ -97,9 +114,10 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Auth | Managed — Supabase Auth or Clerk. Never self-rolled. | Phase 1 |
 | Hosting | Single VPS or PaaS — decided in Phase 7 | Phase 7 |
 | Monitoring | Sentry + UptimeRobot | Phase 8 |
+
+> Auth (Supabase) moved into the installed tables above as of step 1.1.
 
 ## Known issues
 
