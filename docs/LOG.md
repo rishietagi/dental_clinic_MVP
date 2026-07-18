@@ -15,12 +15,12 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1 and 2.2 are
-done** — the `patient` model + migration (2.1) and the patient **CRUD API** (2.2:
-create/read-one/update/archive/unarchive, auth-guarded, audited, soft-delete only). Next is
-**step 2.3** (list + search by name/phone — and the name/phone indexes deferred from 2.1).
-**Four migrations** (empty root → staff_user → audit_log → patient). No frontend patient UI yet
-(2.4); no list/search endpoint yet (2.3).
+**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1–2.3 done** —
+patient model (2.1), CRUD API (2.2), and **list + search** (2.3: `GET /patients` with name/phone
+search + pagination, the **first frontend patient page** `/patients`, and the app's **first
+in-app navigation** via `next/link`). Next is **step 2.4** (patient profile page + medical-notes
+banner). Still **four migrations** — 2.3 added **no** migration (ILIKE search needs no index at
+clinic scale; pg_trgm is the future escalation if the table grows large).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -96,6 +96,63 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 2.3: patient list + search (API + first frontend page)
+
+**Status:** complete — backend list/search + the first patient UI, verified (29 tests pass;
+search proven live through Caddy; frontend lint+build green). For commit.
+
+### Scope decisions (confirmed with user)
+- **Backend search API + a frontend list page** (not API-only).
+- **No search index / no migration this step.** At clinic scale a plain `ILIKE '%q%'` seq-scan is
+  instant; a `pg_trgm` GIN index is premature. Documented as the escalation path if the patient
+  count ever grows large. (Resolves 2.1's "defer indexes to 2.3" → "not needed yet".)
+- **Lighter list item** — list rows omit `medical_notes` (sensitive; only on the profile). List
+  response includes `total`.
+
+### Built — backend
+- `app/schemas/patient.py` — `PatientListItem` (id, name, phone, dob, age, gender, archived — **no
+  medical_notes**) + `PatientListResponse` (`{items, total}`).
+- `app/routers/patients.py` — `GET /patients` (`get_current_staff`): `q` (case-insensitive
+  substring on **name OR phone**), `include_archived` (default false), `limit` (1–100, default
+  20), `offset`. `total` via a count over the filtered subquery; ordered by name. Reads not
+  audited.
+- `tests/test_patients.py` — +4 tests: auth required, name+phone search (and the item omits
+  medical_notes), archived hidden by default / shown with the flag, pagination + limit-cap 422.
+
+### Built — frontend (first patient UI + first navigation)
+- `lib/use-patient-search.ts` (`"use client"`) — debounced (300 ms) authed fetch to
+  `/patients?q=…`, cloning the `use-current-staff` token pattern. States loading/ready/error.
+- `app/patients/page.tsx` — the route (server shell) + `app/patients/patient-list.tsx`
+  (`"use client"`) — a search `Input` + a hand-rolled Tailwind results table (name/phone/age/
+  gender, archived marker, total, empty/loading/error states). Rows are **not** links yet (the
+  profile page is 2.4 — no dead links).
+- `app/role-nav.tsx` — added an optional `href` to `NavItem` and a **Patients** entry; items with
+  an `href` now render as `next/link` `<Link>`s. **This is the app's first in-app navigation** —
+  nothing used `next/link` before. Placeholder items (Dashboard/Reports/Admin) stay plain spans.
+
+### No new deps / migration / CI change
+
+### Verified
+- **29 tests pass** in-container (25 prior + 4 list/search) against real Postgres.
+- Frontend `lint` + `build` green; `/patients` route registered.
+- **Live through Caddy** (real token): created 2 patients → `GET /patients` `total=2`, **list
+  items carry no `medical_notes`**; `?q=asha` → 1 (age computed); `?q=9822` (phone) → matches;
+  no-token → 401.
+
+### Fix during build
+- ESLint `react-hooks/set-state-in-effect` (same rule as step 0.3): the search hook set loading
+  synchronously in the effect body. Moved the `setState({kind:"loading"})` inside the deferred
+  debounce callback. Clean after.
+
+### Carried forward → 2.4
+- Patient **profile page** at `/patients/{id}` + the **medical-notes banner** (non-empty
+  `medical_notes` renders as a banner). Then the list rows can link to it.
+
+### Suggested commit
+`feat: add patient list and search`
 
 ---
 

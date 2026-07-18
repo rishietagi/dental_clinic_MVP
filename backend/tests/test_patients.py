@@ -152,3 +152,63 @@ def test_archive_and_unarchive_are_soft(as_staff):
 
     actions = {a.action for a in _audit_rows(staff_id, uuid.UUID(pid))}
     assert {"archive", "unarchive"} <= actions
+
+
+# --- list + search -----------------------------------------------------------
+
+def test_list_requires_auth():
+    assert client.get("/patients").status_code in (401, 403)
+
+
+def test_search_by_name_and_phone(as_staff):
+    client, _ = as_staff
+    # A unique token so the search only matches rows this test created, even if
+    # the table holds patients from elsewhere.
+    tag = uuid.uuid4().hex[:8]
+    _create(client, name=f"Zerith {tag}", phone="+915550001111")
+    _create(client, name=f"Other {tag}", phone="+915559998888")
+
+    # name substring, case-insensitive
+    r = client.get("/patients", params={"q": f"zerith {tag}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["name"] == f"Zerith {tag}"
+    # list items must NOT leak medical_notes
+    assert "medical_notes" not in body["items"][0]
+
+    # phone substring
+    r = client.get("/patients", params={"q": "5559998888"})
+    assert r.json()["total"] == 1
+
+    # no match
+    assert client.get("/patients", params={"q": f"nomatch{tag}"}).json()["total"] == 0
+
+
+def test_archived_hidden_by_default(as_staff):
+    client, _ = as_staff
+    tag = uuid.uuid4().hex[:8]
+    data = _create(client, name=f"Archie {tag}")
+    client.post(f"/patients/{data['id']}/archive")
+
+    assert client.get("/patients", params={"q": tag}).json()["total"] == 0
+    assert client.get(
+        "/patients", params={"q": tag, "include_archived": "true"}
+    ).json()["total"] == 1
+
+
+def test_pagination_and_limit_bounds(as_staff):
+    client, _ = as_staff
+    tag = uuid.uuid4().hex[:8]
+    for i in range(3):
+        _create(client, name=f"Page {tag} {i}")
+
+    first = client.get("/patients", params={"q": tag, "limit": 2, "offset": 0}).json()
+    assert first["total"] == 3
+    assert len(first["items"]) == 2
+
+    second = client.get("/patients", params={"q": tag, "limit": 2, "offset": 2}).json()
+    assert len(second["items"]) == 1
+
+    # limit above the cap is rejected by validation
+    assert client.get("/patients", params={"limit": 999}).status_code == 422

@@ -90,7 +90,13 @@ computed `age` property). **Four migrations now:** empty root → `add_staff_use
 Backend app structure as of 2.2: `app/models/` (ORM), `app/schemas/` (Pydantic request/response
 contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (`audit`), plus
 `auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is the
-first full resource API.
+first full resource API; **2.3 added `GET /patients` list+search** (plain `ILIKE`, no index yet).
+
+Frontend as of 2.3: the first patient screen `app/patients/` (search box + Tailwind results
+table) and the app's **first in-app navigation** — `next/link` (built into Next; no new dep) via
+the `href`-aware `role-nav`. Patient search reuses the authed browser-fetch pattern
+(`lib/use-patient-search.ts`). Still only shadcn `button`/`card`/`input`/`label` — the results
+table is hand-rolled Tailwind (no table component added).
 
 | Choice | Version | Why |
 |---|---|---|

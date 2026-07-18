@@ -31,7 +31,7 @@ class PatientUpdate(BaseModel):
 
 
 class PatientRead(BaseModel):
-    """Everything the API returns about a patient, including the computed age."""
+    """Everything the API returns about a single patient, including computed age."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,3 +45,28 @@ class PatientRead(BaseModel):
     archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class PatientListItem(BaseModel):
+    """A row in the patient list/search results.
+
+    Deliberately lighter than PatientRead — NO medical_notes. Sensitive notes are
+    only returned by GET /patients/{id} (the profile), never in bulk list responses.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    phone: str | None
+    date_of_birth: date | None
+    age: int | None
+    gender: str | None
+    archived: bool
+
+
+class PatientListResponse(BaseModel):
+    """A page of patient list/search results plus the total match count."""
+
+    items: list[PatientListItem]
+    total: int

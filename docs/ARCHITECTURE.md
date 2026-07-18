@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 2.2.** This describes what is built, not what is planned.
+**Honest to the code as of step 2.3.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -208,6 +208,21 @@ active staff) → **model** (`Patient`) → **DB** (`get_db`), and every mutatio
 the change and its audit entry are atomic. Reads are not audited. Deletes are **soft**
 (`archived` flag) — there is no hard-delete route. Patient ids are path params, never query
 strings.
+
+`GET /patients` (2.3) adds list + search: a `q` param does a case-insensitive substring match on
+name **or** phone (plain `ILIKE` — no index needed at clinic scale; a `pg_trgm` GIN index is the
+escalation path if the table grows), with `include_archived`, `limit`/`offset`, and a `total`
+count. List rows use a lighter `PatientListItem` that **omits `medical_notes`** — sensitive notes
+are only returned by `GET /patients/{id}`, never in bulk.
+
+### Frontend patient page + first navigation (2.3)
+
+`/patients` (`app/patients/`) is the first patient-facing screen: a debounced search box
+(`lib/use-patient-search.ts`, same authed browser→Caddy→`/api` fetch pattern as
+`use-current-staff`) over a Tailwind results table. It's reachable via the **first in-app
+navigation** — `app/role-nav.tsx` gained an `href` on nav items and a `next/link` "Patients"
+link (nothing used `next/link` before; other nav items remain placeholder spans until their pages
+exist).
 
 ### Seeding (`app/seed.py`)
 

@@ -8,7 +8,8 @@
 // button is not security). The pages themselves don't exist yet (Phase 2+);
 // these items demonstrate the gating.
 
-import { LayoutDashboard, BarChart3, Shield } from "lucide-react";
+import { LayoutDashboard, Users, BarChart3, Shield } from "lucide-react";
+import Link from "next/link";
 
 import { useCurrentStaff } from "@/lib/use-current-staff";
 
@@ -17,13 +18,20 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
   // Which roles may see this item. undefined = any signed-in staff member.
   anyOf?: string[];
+  // Route to link to. Items without an href are placeholders (no page yet) and
+  // render as plain, non-clickable labels.
+  href?: string;
 };
 
 const NAV: NavItem[] = [
   { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Patients", icon: Users, href: "/patients" },
   { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
   { label: "Admin", icon: Shield, anyOf: ["admin"] },
 ];
+
+const itemClass =
+  "flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent";
 
 export function RoleNav() {
   const state = useCurrentStaff();
@@ -54,15 +62,19 @@ export function RoleNav() {
         Roles: {roles.length ? roles.join(", ") : "none"}
       </p>
       <nav className="flex flex-col gap-1">
-        {visible.map(({ label, icon: Icon }) => (
-          <span
-            key={label}
-            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
-          >
-            <Icon className="size-4" />
-            {label}
-          </span>
-        ))}
+        {visible.map(({ label, icon: Icon, href }) =>
+          href ? (
+            <Link key={label} href={href} className={itemClass}>
+              <Icon className="size-4" />
+              {label}
+            </Link>
+          ) : (
+            <span key={label} className={itemClass}>
+              <Icon className="size-4" />
+              {label}
+            </span>
+          ),
+        )}
       </nav>
     </div>
   );

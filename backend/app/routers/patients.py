@@ -13,15 +13,22 @@ Patient ids travel as PATH params (/patients/{id}), never as query strings.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_staff
 from app.db import get_db
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
-from app.schemas.patient import PatientCreate, PatientRead, PatientUpdate
+from app.schemas.patient import (
+    PatientCreate,
+    PatientListItem,
+    PatientListResponse,
+    PatientRead,
+    PatientUpdate,
+)
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -32,6 +39,47 @@ def _get_or_404(db: Session, patient_id: UUID) -> Patient:
     if patient is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
     return patient
+
+
+@router.get("", response_model=PatientListResponse)
+def list_patients(
+    q: str | None = Query(default=None, description="Search text (matches name or phone)."),
+    include_archived: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> PatientListResponse:
+    """List patients, optionally filtered by a name/phone search.
+
+    Search is a case-insensitive substring match on name OR phone (front desk can
+    "type anything"). At clinic scale a plain ILIKE scan is instant — no index
+    needed; a pg_trgm GIN index is the escalation path if the table ever grows.
+    Archived patients are hidden unless include_archived=true.
+    """
+    conditions = []
+    if not include_archived:
+        conditions.append(Patient.archived.is_(False))
+
+    term = (q or "").strip()
+    if term:
+        pattern = f"%{term}%"
+        conditions.append(or_(Patient.name.ilike(pattern), Patient.phone.ilike(pattern)))
+
+    base = select(Patient)
+    for cond in conditions:
+        base = base.where(cond)
+
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+
+    rows = db.scalars(
+        base.order_by(Patient.name, Patient.created_at).limit(limit).offset(offset)
+    ).all()
+
+    return PatientListResponse(
+        items=[PatientListItem.model_validate(p) for p in rows],
+        total=total,
+    )
 
 
 @router.post("", response_model=PatientRead, status_code=status.HTTP_201_CREATED)
