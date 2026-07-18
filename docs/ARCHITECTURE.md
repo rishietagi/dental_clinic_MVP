@@ -1,7 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 1.4 (Phase 1 complete).** This describes what is built, not
-what is planned.
+**Honest to the code as of step 2.1.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -159,8 +158,8 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 1.4 there are two models — `staff_user` and `audit_log` — plus the first
-`app/services/` module.
+As of 2.1 there are three models — `staff_user`, `audit_log`, `patient` — plus
+the first `app/services/` module.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -185,6 +184,11 @@ As of 1.4 there are two models — `staff_user` and `audit_log` — plus the fir
   flushes but does **not** commit, so the audit entry and the change it records commit atomically
   in one transaction. Phase 2 mutation endpoints call it with `actor_id=current_staff.id`; the
   seed calls it with `actor_id=None`.
+- **`app/models/patient.py`** — `Patient`, the first patient-data model (Phase 2). Soft-delete
+  only via `archived` (never hard-deleted — medico-legal retention). Stores `date_of_birth`
+  (nullable) and computes `age` via a read-only `@property` rather than storing a stale int.
+  `medical_notes` is one free-text field (renders as a banner later). `created_at`/`updated_at`
+  timestamps. No endpoints yet — CRUD is 2.2.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend

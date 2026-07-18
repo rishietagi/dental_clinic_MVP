@@ -18,3 +18,4 @@ class Base(DeclarativeBase):
 # Register models on Base.metadata. Keep after Base so the modules can import it.
 from app.models.staff_user import StaffUser  # noqa: E402,F401
 from app.models.audit_log import AuditLog  # noqa: E402,F401
+from app.models.patient import Patient  # noqa: E402,F401
