@@ -31,6 +31,9 @@ services:
       ADMIN_USER_ID: ${ADMIN_USER_ID:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_NAME: ${ADMIN_NAME:-}
+      # Supabase project URL — the backend derives the JWKS URL + issuer from it
+      # to verify access tokens. Same value as NEXT_PUBLIC_SUPABASE_URL.
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
     # --reload for local dev; the image's default CMD omits it.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:

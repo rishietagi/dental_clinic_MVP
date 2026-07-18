@@ -74,6 +74,8 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 | pydantic | 2.13.4 | Request/response validation. Comes with FastAPI. |
 | pydantic-settings | 2.14.2 | Loads config from env vars, so nothing is hardcoded and local/prod differ by config only. |
 | python-dotenv | 1.2.2 | Lets pydantic-settings read a local `.env` file. |
+| PyJWT[crypto] | 2.13.0 | Verifies Supabase access tokens (added 1.3). `PyJWKClient` fetches + caches the JWKS public keys; `jwt.decode` checks the ES256 signature + audience + issuer + expiry. |
+| cryptography | 49.0.0 | Backs PyJWT's ES256 (elliptic-curve) signature verification. |
 
 ## Database access
 

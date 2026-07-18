@@ -15,15 +15,17 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 1 in progress.** **Steps 1.1 and 1.2 are complete.** 1.1 = Supabase
-Auth + login page (login flow only). 1.2 = the first real DB model (`staff_user` with a `roles`
-array), its migration, and an idempotent admin seed. Next is **step 1.3** (role guards on the
-API + role-aware nav) — this is where the backend **finally verifies the Supabase JWT** and
-reads `staff_user.roles`. Until 1.3 ships, `/api/*` is unauthenticated. Do not build ahead.
+**Where we are:** **Phase 1 in progress.** **Steps 1.1, 1.2, and 1.3 are complete.** 1.1 =
+Supabase Auth + login page. 1.2 = the `staff_user` model (`roles` array) + migration + admin
+seed. 1.3 = **the backend now verifies the Supabase JWT** (ES256 via JWKS) and enforces roles;
+the frontend shows role-aware nav. Next is **step 1.4** (`audit_log` table + writes on
+mutations). `/api/*` is **no longer open** — `/me` and `/admin/ping` require a valid token.
 
-**Key linkage to remember:** `staff_user.id` **IS** the Supabase Auth user's UUID (the JWT
-`sub`). 1.3 maps a verified token straight to the row by primary key. Roles live in our
-Postgres, not in Supabase user metadata.
+**Key linkage:** `staff_user.id` **IS** the Supabase Auth user's UUID (the JWT `sub`). The auth
+chain verifies the token → reads `sub` → loads the `staff_user` row by PK → checks roles. Roles
+live in **our** Postgres (`staff_user.roles`), never in the token — the token's `role` claim is
+just the Postgres role `"authenticated"`. Fetching roles from the DB means role/active changes
+take effect immediately, without re-issuing tokens.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
@@ -86,6 +88,84 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 1.3: API JWT verification + role guards + role-aware nav
+
+**Status:** backend built and verified (11 tests pass in-container; all live token paths proven
+through Caddy with real ES256 tokens); frontend built (lint+build green). **Browser
+interactive login check handed to the user** (same as 1.1). For commit.
+
+### Scope decisions (confirmed with user)
+- **ES256 / JWKS, no shared secret.** This project's Supabase tokens are asymmetric (verified
+  live: one EC key at `…/auth/v1/.well-known/jwks.json`, `alg=ES256`). Backend verifies with the
+  public key — it never holds a secret.
+- **JWT lib: `pyjwt[crypto]`** (2.13.0) + `cryptography` (49.0.0). `PyJWKClient` fetches/caches
+  the JWKS and refreshes on an unknown `kid`.
+- **Demo endpoints only:** `GET /me` + `GET /admin/ping`. No patient/appointment endpoints
+  (Phase 2). **Minimal role-aware nav**, no full sidebar shell yet.
+- **Frontend reads roles via a browser fetch to `/api/me`** (through Caddy, like health-card) —
+  no new env var, no server-container→backend call.
+
+### Built — backend
+- `app/auth.py` — the reusable chain:
+  `get_current_claims` (HTTPBearer → `jwt.decode` with ES256 + `audience="authenticated"` +
+  issuer; 401 on any PyJWT error) → `get_current_staff` (`sub` → `db.get(StaffUser, sub)`; 403
+  if no row or `not active`) → `require_role(*roles)` (403 unless the staff row holds one of the
+  roles). `PyJWKClient` is built once via `@lru_cache`, lazily, so the app imports without
+  `SUPABASE_URL` and only a request that needs it trips the config check.
+- `app/routers/auth.py` (first router) — `GET /me` (any active staff → `StaffMe` Pydantic model,
+  so no column leakage) and `GET /admin/ping` (`require_role("admin")`). Registered in `main.py`.
+- `app/config.py` — `supabase_url` + derived `supabase_jwks_url` / `supabase_issuer` properties.
+- `requirements.txt` — `pyjwt[crypto]==2.13.0`, `cryptography==49.0.0` (both pinned, installed
+  into `dental-clinic`).
+- `tests/test_auth.py` — 2 DB-free (no token → 401) + 5 DB-backed role tests. The DB tests
+  override `get_current_claims` via `app.dependency_overrides` to feed a fake `{"sub": …}`, so
+  they exercise **our** lookup+role logic deterministically **without minting a real ES256
+  token**. Reuses the `test_staff_user` DB-skip fixture pattern.
+
+### Built — frontend (minimal role-aware nav)
+- `lib/use-current-staff.ts` (`"use client"`) — gets the session token from the browser Supabase
+  client and fetches `/api/me` with a Bearer header. States: loading / staff / not-staff (403) /
+  error.
+- `app/role-nav.tsx` (`"use client"`) — shows nav items gated by role (Dashboard = all; Reports =
+  dentist|admin; Admin = admin), lists the user's roles, and renders a graceful "not set up as
+  staff yet" message on 403. Comment stresses this is convenience, not security.
+- `app/page.tsx` — renders `<RoleNav />`. (Still a server component reading `user.email`.)
+
+### Env wiring
+- Backend `SUPABASE_URL` — added to `config.py`, `backend/.env.example`, and
+  `docker-compose.yml` (mapped from the existing root-`.env` `NEXT_PUBLIC_SUPABASE_URL`, so
+  there's **one** URL value, no duplication). Root `.env.example` note updated.
+
+### Verified
+- **In-container pytest:** `11 passed` (health + 3 staff_user + 7 auth) against real Postgres.
+- **DB-free host run:** auth 401 tests pass, DB tests skip fast.
+- **Live, real ES256 tokens through Caddy (`http://localhost/api`):**
+  - admin token (staff + admin) → `/me` 200 with `roles:[dentist,admin]`; `/admin/ping` 200.
+    (Proven by temporarily seeding `test@clinic.local`'s real `sub` as an admin row, hitting the
+    endpoints, then deleting it — DB left with only the real admin row.)
+  - `test@clinic.local` (valid token, **no** staff row) → `/me` **403** — proves the whole
+    signature/JWKS verification succeeded *and* authorization correctly rejected a non-staff user.
+  - garbage bearer → **401**; no token → **401**.
+- Frontend `lint` + `build` green (`/` dynamic, `/login` static, proxy registered). Stack
+  rebuilt and serving on :80.
+
+### Notes / gotchas
+- Docker Desktop had exited again between steps (known: the engine doesn't stay up on its own).
+  Relaunched; engine 29.6.1 up in ~10s.
+- I don't have the real admin's Supabase password — the admin-200 live path was proven via the
+  temp-row trick above rather than a real admin login. The frontend admin-nav view is the user's
+  browser check.
+
+### Carried forward
+- Backend endpoints exist but are still just `/me` + `/admin/ping`. Real resource endpoints
+  (patients etc.) are Phase 2 and will use `Depends(require_role(...))`.
+- **1.4 next:** `audit_log` table + writing an entry on mutations.
+
+### Suggested commit
+`feat: enforce role-based access control`
 
 ---
 

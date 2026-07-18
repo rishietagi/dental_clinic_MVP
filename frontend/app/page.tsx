@@ -1,4 +1,5 @@
 import { HealthCard } from "./health-card";
+import { RoleNav } from "./role-nav";
 import { SignOutButton } from "./sign-out-button";
 import { createClient } from "@/lib/supabase/server";
 
@@ -18,6 +19,7 @@ export default async function Home() {
         <SignOutButton />
       </div>
       <h1 className="text-3xl font-semibold tracking-tight">Dental Clinic</h1>
+      <RoleNav />
       <HealthCard />
     </main>
   );

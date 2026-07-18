@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 1.2.** This describes what is built, not what is planned.
+**Honest to the code as of step 1.3.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -68,10 +68,14 @@ So: `NEXT_PUBLIC_API_URL` must always be a URL **the browser can reach**, and th
 client-side to match. `NEXT_PUBLIC_*` values are inlined at **build** time, not runtime — step
 0.4's Dockerfile therefore has to pass it as a build arg.
 
-## Authentication (Supabase — step 1.1)
+## Authentication & authorization (Supabase — steps 1.1 & 1.3)
 
-Auth lives entirely in the **frontend/browser layer** for now. The FastAPI backend is not yet
-involved — it does **not** verify the Supabase JWT (that is step 1.3).
+Two layers work together:
+- **Frontend (1.1):** signs the user in against Supabase, keeps the session in cookies, and
+  guards routes (signed-in vs not) in `proxy.ts`.
+- **Backend (1.3):** verifies the Supabase **JWT** on protected endpoints and enforces **roles**
+  from our database. This is the real security boundary — "role checks on the API, not just
+  hidden UI." The frontend's role-aware nav is only a convenience on top.
 
 ```mermaid
 flowchart LR
@@ -81,7 +85,31 @@ flowchart LR
     PROXY -->|no session → /login| LOGIN[/login page/]
     PROXY -->|session ok| HOME[protected pages]
     HOME -.->|reads user server-side| SUPA
+    B -->|"Bearer token → /api/me"| BE[FastAPI<br/>verify JWT + roles]
+    BE -->|"JWKS public key"| SUPA
+    BE -->|"sub → staff_user.roles"| DB[(staff_user)]
 ```
+
+### API auth chain (backend, `app/auth.py`)
+
+The endpoint dependencies, from raw request to an authorized staff member:
+
+1. **`get_current_claims`** — reads the `Authorization: Bearer <token>` header, fetches the
+   ES256 **public key** from Supabase's JWKS endpoint (`PyJWKClient`, cached), and
+   `jwt.decode`s the token verifying signature + `audience="authenticated"` + issuer + expiry.
+   Any failure → **401**. *The backend never holds a secret — tokens are asymmetric (ES256).*
+2. **`get_current_staff`** — takes `claims["sub"]` (the Supabase UUID) and loads
+   `staff_user` by primary key. No row, or `active = false` → **403**. A valid Supabase token
+   means *authenticated*, not *authorized here*.
+3. **`require_role(*roles)`** — a dependency factory; **403** unless the staff row holds one of
+   the given roles. Phase 2 endpoints will decorate with `Depends(require_role("dentist", …))`.
+
+`GET /me` uses (2) and returns the staff member + roles (the frontend nav's source of truth).
+`GET /admin/ping` uses `require_role("admin")` and exists to demonstrate the 403 path.
+
+**Roles come from our DB, not the token.** The token's `role` claim is the Postgres role
+(`"authenticated"`); app roles live in `staff_user.roles`. So changing a user's roles or
+deactivating them takes effect on the next request — no token reissue needed.
 
 - **`lib/supabase/client.ts`** — browser client (`createBrowserClient`). Used by the login form
   and the sign-out button.
@@ -146,10 +174,12 @@ As of 1.2 there is one model: `staff_user`.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
-controls — which is what step 1.3 will do (verify JWT → `sub` → `staff_user` by PK → roles).
+controls — which is exactly what the 1.3 auth chain does (verify JWT → `sub` → `staff_user` by
+PK → roles).
 
-No route uses `get_db` yet — the API is still just `/health`. Endpoints arrive with the role
-guards in 1.3 and the patient CRUD in Phase 2.
+`get_db` is now used by `get_current_staff` (via `/me` and any role-guarded route). The only
+routes so far are `/health`, `/me`, and `/admin/ping`; resource endpoints (patients etc.) arrive
+in Phase 2 and will hang off `require_role(...)`.
 
 ### Seeding (`app/seed.py`)
 
