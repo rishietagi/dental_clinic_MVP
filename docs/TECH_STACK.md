@@ -88,6 +88,7 @@ Local dev runs the whole stack via `docker compose up --build`. Verified with Do
 | Backend image | `python:3.12-slim` | Runs uvicorn. |
 | Postgres | `postgres:16-alpine` | The db service. **Runs but nothing connects yet** — app wiring is step 0.5. |
 | Caddy | `caddy:2-alpine` | Reverse proxy and single entry point on `:80`. Routes `/api/*` → backend, else → frontend. |
+| GitHub Actions | `.github/workflows/ci.yml` | CI on push/PR to main. Two parallel jobs: backend `pytest` (Python 3.12, pip), frontend `npm ci` + lint + build (Node 24). **Tests only — no deploy** (Phase 7). |
 
 ## Chosen but not yet installed
 
@@ -96,7 +97,6 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| CI | GitHub Actions — tests only | Step 0.6 |
 | Auth | Managed — Supabase Auth or Clerk. Never self-rolled. | Phase 1 |
 | Hosting | Single VPS or PaaS — decided in Phase 7 | Phase 7 |
 | Monitoring | Sentry + UptimeRobot | Phase 8 |

@@ -33,8 +33,8 @@ person can be both dentist and admin without logging in twice.
 
 ## Current status
 
-- **Phase:** 0 — Foundation
-- **Step:** 0.5 — Postgres wired in (SQLAlchemy + Alembic)
+- **Phase:** 0 — Foundation **(complete)**
+- **Step:** 0.6 — CI (GitHub Actions, tests only). Next: Phase 1 — auth & roles.
 
 ### What actually exists
 
@@ -128,6 +128,12 @@ If the card is red, the backend isn't running — start it first (above).
 **Run both together.** The frontend needs the backend for the health card to go green. Two
 terminals: `uvicorn` on :8000, `npm run dev` on :3000. The backend's `CORS_ORIGINS` already
 allows `http://localhost:3000`.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and PR to `main`: a backend job (`pytest`) and a
+frontend job (`npm ci` + lint + build), in parallel. **Tests only — no deploy.** Deploy is
+added to CI in Phase 7, not before.
 
 ## How to deploy
 

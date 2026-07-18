@@ -15,8 +15,10 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** Phase 0 — Foundation. **Step 0.5 is complete.** Step 0.6 (GitHub Actions:
-tests only, no deploy) is next and has not been started.
+**Where we are:** **Phase 0 is complete** (0.6 done). Next is **Phase 1 — Auth & roles**,
+starting with step 1.1 (managed auth via a free Supabase project, hit from localhost, + a login
+page). Not started. NOTE: Phase 1 is the first step that needs a cloud dependency (Supabase
+auth) even in local mode — confirm the approach with the user before building.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
@@ -72,6 +74,43 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 0.6: CI pipeline (GitHub Actions) — Phase 0 complete
+
+**Status:** complete. Workflow written and its commands verified locally; the workflow itself
+runs on GitHub after the push. For commit.
+
+### Built
+- `.github/workflows/ci.yml` — triggers on push + PR to `main`. Two **parallel** jobs:
+  - **backend:** `actions/setup-python@v5` (3.12, pip cache) → `pip install -r requirements.txt`
+    → `python -m pytest -q`. Plain pip, not conda (CI is a clean machine; pins make versions
+    match).
+  - **frontend:** `actions/setup-node@v4` (Node 24, npm cache) → `npm ci` → `npm run lint` →
+    `npm run build`.
+- **Tests only. No deploy** — deploy is Phase 7 (a comment in the file says so).
+
+### Decisions (asked user)
+- **Backend + frontend both** (not backend-only). The frontend build/lint catches TS errors
+  and standalone-build breaks that wouldn't otherwise surface until `docker compose up`.
+- **No Postgres service in CI yet.** The only test hits `/health` and never touches the DB, so
+  a Postgres service would prove nothing and slow every run. Add it in **Phase 2** with the
+  first model + DB-backed tests. A comment in the workflow records this.
+
+### Verified locally (can't run Actions itself from here)
+- YAML parses; jobs `backend`, `frontend`; triggers push + pull_request.
+- Backend steps in a **clean throwaway venv** (mimics CI, no conda): `pip install -r
+  requirements.txt` then `pytest` → `1 passed`.
+- Frontend `npm ci` → exit 0 (lockfile in sync — the thing `npm ci` is strict about). lint +
+  build already green since 0.3/0.4, frontend unchanged since.
+
+### Note for after the push
+Watch the repo's **Actions** tab — the "CI" workflow should appear with two jobs. That's the
+only part not verifiable locally, because Actions runs on GitHub's servers.
+
+### Suggested commit
+`ci: add test pipeline`
 
 ---
 
@@ -301,12 +340,14 @@ authority** — if it is absent, ask the user for it rather than proceeding on t
 
 ---
 
-## Next up — Step 0.6 (not started)
+## Next up — Phase 1, Step 1.1 (not started)
 
-GitHub Actions: **tests only, no deploy** (deploy is Phase 7 — do not add it).
+**Auth & roles.** This is the first cloud dependency, even in local mode — a free Supabase
+project's auth API, called from localhost. Never self-roll auth (hard constraint).
 
-- A workflow that sets up Python 3.12, installs `backend/requirements.txt`, and runs
-  `pytest`. Consider whether the frontend gets a `npm run build`/lint job too.
-- Commit: `ci: add test pipeline`.
+- **Confirm the approach with the user first** (Supabase vs Clerk; free project setup).
+- 1.1: managed auth + a login page.
+- Then 1.2 staff_user model + roles array, 1.3 role guards + role-aware nav, 1.4 audit_log.
 
-Then stop at CHECKPOINT 0.6.
+This crosses out of Phase 0's "local only" into needing an external account. Plan mode first;
+stop and confirm before creating any accounts or adding SDKs.
