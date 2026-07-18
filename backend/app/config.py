@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # list fields as JSON, which would reject the plain comma-separated form.
     cors_origins: str = "http://localhost:3000"
 
+    # Admin to seed into staff_user (see app/seed.py). admin_user_id is the
+    # Supabase Auth user's UUID — copy it from the Supabase dashboard
+    # (Authentication → Users → the user). Empty by default so the app runs
+    # without it; the seed script fails loud if it's missing when run.
+    admin_user_id: str = ""
+    admin_email: str = ""
+    admin_name: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

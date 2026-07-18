@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 1.1.** This describes what is built, not what is planned.
+**Honest to the code as of step 1.2.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -130,18 +130,33 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 0.5 there is a data-access layer, but no models yet.
+As of 1.2 there is one model: `staff_user`.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
   one transaction), and `get_db` (a FastAPI dependency that yields a session and always
   closes it).
-- **`app/models/__init__.py`** — `Base`, the `DeclarativeBase` every future model inherits
-  from. `Base.metadata` is the in-code description of all tables; it is **empty** until
-  Phase 2.
+- **`app/models/__init__.py`** — `Base`, the `DeclarativeBase` every model inherits from. It
+  **imports each model** at the bottom so they register on `Base.metadata` by the time Alembic's
+  `env.py` runs (otherwise `--autogenerate` sees an empty schema).
+- **`app/models/staff_user.py`** — `StaffUser`. Its primary key **is the Supabase Auth user's
+  UUID** (the JWT `sub`) — one identity, no separate linking column. `roles` is a Postgres
+  `ARRAY(Text)` holding the set of roles (e.g. `["dentist","admin"]`), never a single string.
+  `active` soft-disables a login; `email` mirrors the Supabase login email (unique).
 
-Nothing in the request path uses `get_db` yet — no route touches the database. The wiring
-exists so Phase 2 can add models and endpoints without re-plumbing.
+**Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
+authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
+controls — which is what step 1.3 will do (verify JWT → `sub` → `staff_user` by PK → roles).
+
+No route uses `get_db` yet — the API is still just `/health`. Endpoints arrive with the role
+guards in 1.3 and the patient CRUD in Phase 2.
+
+### Seeding (`app/seed.py`)
+
+`python -m app.seed` upserts the admin `staff_user` row from `ADMIN_USER_ID` / `ADMIN_EMAIL` /
+`ADMIN_NAME` (idempotent — safe to re-run). `ADMIN_USER_ID` is the admin's Supabase UUID, so the
+seeded row's PK matches their Auth identity. Run it once per environment after migrating:
+`docker compose run --rm backend python -m app.seed`.
 
 ## Migrations (Alembic)
 

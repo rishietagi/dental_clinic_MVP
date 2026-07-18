@@ -78,7 +78,9 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 ## Database access
 
 Wired into the app as of step 0.5: engine + session in `app/db.py`, `Base` in
-`app/models/`, Alembic configured with one empty migration. No models yet (Phase 2).
+`app/models/`, Alembic configured. **First real model as of step 1.2:** `staff_user`
+(`app/models/staff_user.py`) with a Postgres `ARRAY(Text)` roles column and a UUID PK that
+equals the Supabase Auth user's UUID. Two migrations now: the empty root and `add_staff_user`.
 
 | Choice | Version | Why |
 |---|---|---|
@@ -105,7 +107,7 @@ Local dev runs the whole stack via `docker compose up --build`. Verified with Do
 | Backend image | `python:3.12-slim` | Runs uvicorn. |
 | Postgres | `postgres:16-alpine` | The db service. **Runs but nothing connects yet** — app wiring is step 0.5. |
 | Caddy | `caddy:2-alpine` | Reverse proxy and single entry point on `:80`. Routes `/api/*` → backend, else → frontend. |
-| GitHub Actions | `.github/workflows/ci.yml` | CI on push/PR to main. Two parallel jobs: backend `pytest` (Python 3.12, pip), frontend `npm ci` + lint + build (Node 24). **Tests only — no deploy** (Phase 7). |
+| GitHub Actions | `.github/workflows/ci.yml` | CI on push/PR to main. Two parallel jobs: backend `pytest` (Python 3.12, pip) — **now with a `postgres:16` service + `alembic upgrade head`** so the DB-backed tests run (added 1.2); frontend `npm ci` + lint + build (Node 24). **Tests only — no deploy** (Phase 7). |
 
 ## Chosen but not yet installed
 

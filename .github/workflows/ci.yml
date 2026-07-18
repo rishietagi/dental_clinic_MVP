@@ -16,6 +16,28 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # Postgres for the DB-backed tests (staff_user, step 1.2). Same creds/db name
+    # as the local compose db so DATABASE_URL is the only thing that differs.
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clinic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The service is reachable on localhost:5432 from the job runner.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/clinic
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,11 +51,12 @@ jobs:
       # requirements are pinned, so versions match what we run locally.
       - run: pip install -r requirements.txt
 
-      - run: python -m pytest -q
+      # Prove the migrations apply cleanly on a fresh database.
+      - run: alembic upgrade head
 
-  # No Postgres service here yet: the only test hits /health and never touches
-  # the database. Add a postgres service + `alembic upgrade head` in Phase 2,
-  # when the first model and DB-backed tests exist and it actually proves something.
+      # With DATABASE_URL set + the migration applied, the DB-backed tests run
+      # for real (they self-skip only when no database is reachable).
+      - run: python -m pytest -q
 
   frontend:
     name: Frontend — lint & build

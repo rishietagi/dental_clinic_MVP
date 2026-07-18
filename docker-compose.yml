@@ -26,6 +26,11 @@ services:
       ENVIRONMENT: development
       # Same-origin through Caddy, plus the direct dev port just in case.
       CORS_ORIGINS: http://localhost,http://localhost:3000
+      # Admin to seed into staff_user (python -m app.seed). Project-specific, so
+      # read from the gitignored root .env (see .env.example) — not hardcoded here.
+      ADMIN_USER_ID: ${ADMIN_USER_ID:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_NAME: ${ADMIN_NAME:-}
     # --reload for local dev; the image's default CMD omits it.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
