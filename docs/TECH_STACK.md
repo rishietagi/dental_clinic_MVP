@@ -58,14 +58,15 @@ and is painful to trace. Local and container majors stay matched.
 | pydantic-settings | 2.14.2 | Loads config from env vars, so nothing is hardcoded and local/prod differ by config only. |
 | python-dotenv | 1.2.2 | Lets pydantic-settings read a local `.env` file. |
 
-## Database — installed, not yet used
+## Database access
 
-Pinned now so the environment is stable, but no code imports them until step 0.5.
+Wired into the app as of step 0.5: engine + session in `app/db.py`, `Base` in
+`app/models/`, Alembic configured with one empty migration. No models yet (Phase 2).
 
 | Choice | Version | Why |
 |---|---|---|
-| SQLAlchemy | 2.0.51 | ORM and data access layer. |
-| Alembic | 1.18.5 | Schema migrations — evolving the schema without losing real patient data. |
+| SQLAlchemy | 2.0.51 | ORM and data access layer. Engine with `pool_pre_ping`; `SessionLocal`; `get_db` dependency. |
+| Alembic | 1.18.5 | Schema migrations. DB URL read from `DATABASE_URL` in `env.py` (removed from `alembic.ini` so no accidental prod migration). |
 | psycopg[binary] | 3.3.4 | PostgreSQL driver. `[binary]` avoids needing a local compiler. |
 
 ## Tests
@@ -95,7 +96,6 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Database (app wiring) | SQLAlchemy engine + Alembic against Postgres | Step 0.5 |
 | CI | GitHub Actions — tests only | Step 0.6 |
 | Auth | Managed — Supabase Auth or Clerk. Never self-rolled. | Phase 1 |
 | Hosting | Single VPS or PaaS — decided in Phase 7 | Phase 7 |

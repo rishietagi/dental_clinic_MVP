@@ -34,7 +34,7 @@ person can be both dentist and admin without logging in twice.
 ## Current status
 
 - **Phase:** 0 — Foundation
-- **Step:** 0.4 — Containerised with Docker Compose
+- **Step:** 0.5 — Postgres wired in (SQLAlchemy + Alembic)
 
 ### What actually exists
 
@@ -69,6 +69,16 @@ docker compose up --build
 Open **http://localhost** — clinic name + a green **System OK** card. The API is at
 `http://localhost/api/health` (Caddy strips `/api` and forwards to the backend). Stop with
 `docker compose down`.
+
+**Run database migrations** (needs the db service up):
+
+```bash
+docker compose run --rm backend alembic upgrade head
+```
+
+This applies any pending migrations. On a fresh database it creates the `alembic_version`
+tracking table and applies the empty baseline. `docker compose down` keeps your data (named
+volume `pgdata`); `docker compose down -v` **deletes** it — only do that to reset.
 
 ### By hand (per-service dev)
 

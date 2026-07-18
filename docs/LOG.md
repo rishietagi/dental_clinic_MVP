@@ -15,8 +15,8 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** Phase 0 — Foundation. **Step 0.4 is complete.** Step 0.5 (Postgres wiring:
-SQLAlchemy engine + Alembic + one empty migration) is next and has not been started.
+**Where we are:** Phase 0 — Foundation. **Step 0.5 is complete.** Step 0.6 (GitHub Actions:
+tests only, no deploy) is next and has not been started.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
@@ -72,6 +72,55 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 0.5: Postgres wired in (SQLAlchemy + Alembic)
+
+**Status:** complete, verified in the running db container, torn down clean. For commit.
+
+### Built
+- `app/db.py` — SQLAlchemy `engine` (`pool_pre_ping=True`), `SessionLocal`
+  (`expire_on_commit=False`), `get_db` dependency. Reuses `settings.database_url` — one config
+  source.
+- `app/models/__init__.py` — `Base(DeclarativeBase)`. Empty metadata (no models until Phase 2).
+- Alembic scaffolded (`alembic init alembic`) → `alembic/`, `alembic.ini`.
+- One **empty** migration: `alembic/versions/78e9327c7254_empty_initial_migration.py`
+  (`down_revision = None`, both `upgrade`/`downgrade` are `pass`).
+- Backend Dockerfile now also copies `alembic/` + `alembic.ini` (migrations ship in the image).
+
+### The two safety-critical Alembic edits (from the brief)
+- **Deleted `sqlalchemy.url` from `alembic.ini` entirely** (replaced with a comment explaining
+  why). No fallback URL to accidentally migrate the wrong DB.
+- **`alembic/env.py`:** `config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])`
+  and `target_metadata = Base.metadata`. Uses `os.environ[...]` (subscript) so a missing var
+  fails loud, not silent.
+
+### Decisions
+- **Migrations run inside the backend container** (user's choice). The db is reachable as host
+  `db` on the compose network — same `DATABASE_URL` the app uses, no host Postgres client, and
+  the db port is never published. Prod-faithful.
+- **Migrations copied into the image**, not just bind-mounted, so app code and migration code
+  can't drift.
+
+### Verified (three-way, in the real db)
+- `alembic upgrade head` (from the built image) → `Running upgrade -> 78e9327c7254`.
+- `psql \dt` → only `alembic_version` exists (correct: no app tables yet).
+- `SELECT version_num` → `78e9327c7254`; `alembic current` → `78e9327c7254 (head)`. All agree.
+- **Safety net proven:** `alembic current` with `DATABASE_URL` empty errors out
+  (`Could not parse SQLAlchemy URL`) and connects to nothing. With the var truly unset it would
+  be a `KeyError` — either way it refuses to run.
+- `docker compose down` clean; `pgdata` volume persists (holds the migration state).
+
+### Gotcha for next time
+Generating a migration needs the file to persist to the host, so it was created via a one-off
+container with `backend/` bind-mounted (`docker compose run --rm -v "${PWD}/backend:/app"
+backend alembic revision --autogenerate ...`). *Applying* migrations does not need the mount —
+run it from the plain image. Also: PowerShell wraps Docker's stderr status lines in red
+`NativeCommandError` text; it is not a failure — check the actual last output line.
+
+### Suggested commit
+`feat: add Postgres with Alembic migrations`
 
 ---
 
@@ -252,17 +301,12 @@ authority** — if it is absent, ask the user for it rather than proceeding on t
 
 ---
 
-## Next up — Step 0.5 (not started)
+## Next up — Step 0.6 (not started)
 
-Wire Postgres into the app. The db container already runs (from 0.4).
+GitHub Actions: **tests only, no deploy** (deploy is Phase 7 — do not add it).
 
-- `app/db.py` — SQLAlchemy engine with `pool_pre_ping`, `SessionLocal`, `get_db` dependency.
-- `app/models/__init__.py` — `DeclarativeBase` `Base`. **No models yet** (those are Phase 2).
-- Alembic configured. **Critical:** `alembic/env.py` must do
-  `config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])` and
-  `target_metadata = Base.metadata`. **Delete the url from `alembic.ini` entirely** — no
-  fallback, so nobody migrates prod by accident.
-- Generate one **empty** initial migration.
-- Checkpoint 0.5: `alembic upgrade head` works and the `alembic_version` table exists.
+- A workflow that sets up Python 3.12, installs `backend/requirements.txt`, and runs
+  `pytest`. Consider whether the frontend gets a `npm run build`/lint job too.
+- Commit: `ci: add test pipeline`.
 
-Then stop at CHECKPOINT 0.5.
+Then stop at CHECKPOINT 0.6.

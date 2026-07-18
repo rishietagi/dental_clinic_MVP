@@ -14,6 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App source. In local dev, compose bind-mounts over this for hot reload.
 COPY app ./app
 
+# Alembic migrations ship in the same image as the app, so migration code and
+# app code can never drift apart. Run them with: alembic upgrade head
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+
 EXPOSE 8000
 
 # Production default. Compose overrides this with --reload for local dev.

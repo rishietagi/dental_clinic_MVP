@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 0.4.** This describes what is built, not what is planned.
+**Honest to the code as of step 0.5.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -76,17 +76,47 @@ Nothing is hardcoded — local and production will differ by config only.
 |---|---|---|---|
 | `environment` | `ENVIRONMENT` | backend | Used — returned by `/health`. |
 | `cors_origins` | `CORS_ORIGINS` | backend | Used — feeds the CORS middleware. Comma-separated. Defaults to `http://localhost:3000`, which is where `next dev` serves. |
-| `database_url` | `DATABASE_URL` | backend | Defined but unused until step 0.5. |
+| `database_url` | `DATABASE_URL` | backend | Used — feeds the SQLAlchemy engine (`app/db.py`) and, separately, Alembic (`alembic/env.py`). |
 | — | `NEXT_PUBLIC_API_URL` | frontend | Used — the backend base URL the browser calls. Inlined at **build** time. `http://localhost/api` under Docker (through Caddy); `http://localhost:8000` for by-hand dev. |
 
 `cors_origins` is typed as a `str` and split on commas by the `cors_origins_list` property
 rather than being typed as `list[str]`, because pydantic-settings parses list-typed fields as
 JSON — which would reject the plain `http://localhost:3000` form in a `.env` file.
 
-## Current data model
+## Data access layer
 
-None. There are no tables, no ORM models, and no migrations. The first model arrives in
-Phase 2; the engine and Alembic scaffolding arrive in step 0.5.
+As of 0.5 there is a data-access layer, but no models yet.
+
+- **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
+  on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
+  one transaction), and `get_db` (a FastAPI dependency that yields a session and always
+  closes it).
+- **`app/models/__init__.py`** — `Base`, the `DeclarativeBase` every future model inherits
+  from. `Base.metadata` is the in-code description of all tables; it is **empty** until
+  Phase 2.
+
+Nothing in the request path uses `get_db` yet — no route touches the database. The wiring
+exists so Phase 2 can add models and endpoints without re-plumbing.
+
+## Migrations (Alembic)
+
+Schema changes go through Alembic migrations — never manual SQL against live data. This is
+how the schema evolves without losing patient records.
+
+- Migration files live in `backend/alembic/versions/`. Each has a `revision` id and a
+  `down_revision` pointing at the previous one, forming an ordered chain Alembic walks on
+  `upgrade`/`downgrade`. The first (and currently only) migration is **empty** —
+  `78e9327c7254`, with `down_revision = None` (the root).
+- Alembic tracks which revision the database is at in an `alembic_version` table it manages.
+- **The DB URL is not in `alembic.ini`.** That line was deleted; `alembic/env.py` reads
+  `os.environ["DATABASE_URL"]` instead. No fallback means a migration **cannot run** without
+  an explicit `DATABASE_URL` — so nobody can accidentally migrate the wrong database. Proven:
+  running Alembic with an empty/missing `DATABASE_URL` errors out and connects to nothing.
+- `env.py`'s `target_metadata = Base.metadata`, so `--autogenerate` will detect models
+  automatically once they exist.
+- **Migrations ship inside the backend image** (the Dockerfile copies `alembic/` and
+  `alembic.ini`), so migration code and app code can never drift. Run them with
+  `docker compose run --rm backend alembic upgrade head`.
 
 ## Deployment topology
 
