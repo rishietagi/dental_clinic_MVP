@@ -1,0 +1,15 @@
+# Caddy is the single entry point. The browser talks only to this, on one origin.
+# SITE_ADDRESS is overridable by env so prod (Phase 7) can set a real domain
+# without editing this file — config, not architecture.
+{$SITE_ADDRESS:http://localhost}
+
+# /api/* → backend, with the /api prefix stripped so the app sees /health etc.
+handle /api/* {
+	uri strip_prefix /api
+	reverse_proxy backend:8000
+}
+
+# Everything else → the Next.js frontend.
+handle {
+	reverse_proxy frontend:3000
+}

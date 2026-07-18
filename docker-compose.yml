@@ -1,0 +1,59 @@
+# Local development stack. Prod (Phase 7) will be a separate compose file.
+# `docker compose up --build` → app at http://localhost
+#
+# All config is here via env; nothing is hardcoded in the images.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: clinic
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d clinic"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # Not published to the host: only the app talks to it, over the compose network.
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/clinic
+      ENVIRONMENT: development
+      # Same-origin through Caddy, plus the direct dev port just in case.
+      CORS_ORIGINS: http://localhost,http://localhost:3000
+    # --reload for local dev; the image's default CMD omits it.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      # Bind-mount source so edits hot-reload. Not baked into the prod image.
+      - ./backend/app:/app/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Inlined into the browser bundle at build time. The browser reaches the
+        # backend THROUGH Caddy at /api — never a Docker hostname it can't resolve.
+        NEXT_PUBLIC_API_URL: http://localhost/api
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  pgdata:

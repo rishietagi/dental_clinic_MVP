@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 0.2.** This describes what is built, not what is planned.
+**Honest to the code as of step 0.4.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -47,6 +47,12 @@ persistence.
 
 No database is touched and no auth is checked — neither exists yet.
 
+**Under Docker Compose the shape differs slightly:** the browser talks only to Caddy on
+`http://localhost` and calls `http://localhost/api/health`. That is the **same origin** as the
+page, so CORS is not exercised at all; Caddy strips `/api` and forwards to `backend:8000`. The
+two-origin, CORS-exercising path above is the by-hand dev mode (`next dev` on :3000 calling
+uvicorn on :8000). Both are supported; see the topology section.
+
 ## Why the health call is client-side
 
 `HealthCard` is a `"use client"` component and the fetch runs in the **browser**, deliberately.
@@ -71,7 +77,7 @@ Nothing is hardcoded — local and production will differ by config only.
 | `environment` | `ENVIRONMENT` | backend | Used — returned by `/health`. |
 | `cors_origins` | `CORS_ORIGINS` | backend | Used — feeds the CORS middleware. Comma-separated. Defaults to `http://localhost:3000`, which is where `next dev` serves. |
 | `database_url` | `DATABASE_URL` | backend | Defined but unused until step 0.5. |
-| — | `NEXT_PUBLIC_API_URL` | frontend | Used — the backend base URL the browser calls. Inlined at build time. |
+| — | `NEXT_PUBLIC_API_URL` | frontend | Used — the backend base URL the browser calls. Inlined at **build** time. `http://localhost/api` under Docker (through Caddy); `http://localhost:8000` for by-hand dev. |
 
 `cors_origins` is typed as a `str` and split on commas by the `cors_origins_list` property
 rather than being typed as `list[str]`, because pydantic-settings parses list-typed fields as
@@ -84,15 +90,33 @@ Phase 2; the engine and Alembic scaffolding arrive in step 0.5.
 
 ## Deployment topology
 
-None. Everything runs on one developer machine as two processes started by hand. There are no
-containers, no proxy, and no hosting. Containers arrive in step 0.4; hosting is decided in
-Phase 7.
+Local only. The whole stack runs on one machine under Docker Compose (`docker-compose.yml`).
+No hosting, no TLS, no domain — those are Phase 7.
 
-```
-developer machine
-├── next dev (port 3000) → Next.js app  ─┐
-└── uvicorn  (port 8000) → FastAPI app  ←┘ browser calls :8000 directly
+```mermaid
+flowchart LR
+    B[Browser<br/>http://localhost] -->|:80| CADDY[caddy:2-alpine]
+    CADDY -->|"/api/* → strip /api"| BE[backend<br/>python:3.12-slim<br/>uvicorn :8000]
+    CADDY -->|else| FE[frontend<br/>node:24-alpine<br/>next standalone :3000]
+    BE -.->|:5432 — not wired yet| DB[(db<br/>postgres:16-alpine)]
 ```
 
-`next.config.ts` sets `output: "standalone"`, so a production build emits a self-contained
-server bundle at `.next/standalone/`. Nothing consumes it yet — step 0.4's Docker image will.
+**Caddy is the only service that publishes a host port** (`80:80`). backend (:8000), frontend
+(:3000), and db (:5432) are reachable only on the internal compose network — the browser never
+hits them directly. This is what lets `NEXT_PUBLIC_API_URL` be `http://localhost/api`.
+
+Two footguns this step had to handle, both verified:
+- **`NEXT_PUBLIC_API_URL` is a build arg**, not a runtime env var — it is inlined into the
+  browser bundle during `npm run build`. The frontend Dockerfile sets it via `ARG`/`ENV`
+  before the build; compose passes it.
+- **The standalone build omits `.next/static` and `public/`.** The frontend Dockerfile's
+  runner stage copies all three (`standalone`, `static`, `public`) or the page loads unstyled.
+
+**Postgres runs but is not connected.** No app code opens `DATABASE_URL` yet — the db service
+exists so the compose topology is complete and healthchecked. Wiring is step 0.5.
+
+### By-hand dev (no Docker)
+
+Still supported and often faster for frontend work: run `uvicorn` and `next dev` directly (see
+[PROJECT.md](PROJECT.md)). In that mode the browser calls `http://localhost:8000` cross-origin,
+and the backend's `CORS_ORIGINS` allows `http://localhost:3000`.

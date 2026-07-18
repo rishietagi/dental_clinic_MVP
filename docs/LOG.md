@@ -15,8 +15,8 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** Phase 0 — Foundation. **Step 0.3 is complete.** Step 0.4 (Docker Compose)
-is next and has not been started — but see the WSL blocker below.
+**Where we are:** Phase 0 — Foundation. **Step 0.4 is complete.** Step 0.5 (Postgres wiring:
+SQLAlchemy engine + Alembic + one empty migration) is next and has not been started.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
@@ -61,12 +61,10 @@ the original step instructions say otherwise:
 | **`next.config.ts`, not `.js`** | `next.config.js` in step 0.3 | Next 16 scaffolds a TypeScript config. `output: "standalone"` lives in the `.ts` file. | `frontend/next.config.ts` |
 | **Tailwind 4, not 3** | — | No `tailwind.config.js` exists. v4 is CSS-first: configured in `app/globals.css`. Don't go looking for the JS config. | `docs/TECH_STACK.md` |
 
-**Blocker for step 0.4 (not 0.3):** Docker Desktop cannot start — its WSL2 backend is broken.
-`wsl --version` fails with `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG` ("class not registered"),
-and Docker Desktop shows "WSL needs updating" / "Engine starting". Fix from an **elevated**
-PowerShell: `wsl --update`, or `wsl --install --no-distribution` if that errors the same way,
-then reboot and wait for "Engine running". The Docker CLI itself is fine (29.6.1, on PATH) —
-only the engine is down. Node-based work (step 0.3) is unaffected.
+**Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
+2.9.3.0 / kernel 6.18.35.2, Docker engine 29.6.1 (linux, overlayfs), Compose v5.3.0,
+`docker run hello-world` succeeds. Base images `node:24-alpine`, `python:3.12-slim`,
+`postgres:16-alpine`, `caddy:2-alpine` all confirmed available.
 
 **Known gotchas:**
 - A shell started before an install won't see new PATH entries. Check the filesystem and the
@@ -74,6 +72,59 @@ only the engine is down. Node-based work (step 0.3) is unaffected.
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-17 — Step 0.4: Containerise with Docker Compose
+
+**Status:** complete, verified end-to-end in a browser, torn down clean. Handed off for commit.
+
+### Built
+- `backend/Dockerfile` (`python:3.12-slim`) + `backend/.dockerignore`.
+- `frontend/Dockerfile` — multi-stage deps/builder/runner on **`node:24-alpine`**, serves the
+  standalone build as a non-root user. + `frontend/.dockerignore`.
+- `Caddyfile` — `{$SITE_ADDRESS:http://localhost}`; `/api/*` → strip `/api` →
+  `reverse_proxy backend:8000`; else → `reverse_proxy frontend:3000`.
+- `docker-compose.yml` — four services: db (`postgres:16-alpine`, healthchecked, named volume
+  `pgdata`), backend (uvicorn `--reload`, source bind-mounted), frontend (built with the API
+  URL as a build arg), caddy (`80:80`). Only Caddy publishes a host port.
+
+### Decisions (flagged to user, standing authority to proceed)
+- **`NEXT_PUBLIC_API_URL=http://localhost/api`**, not `:8000`. The browser goes through Caddy;
+  the backend answers under `/api` (prefix stripped). This makes the whole app a single origin
+  on port 80, so **CORS is not even exercised** in the Docker path. `CORS_ORIGINS` is still set
+  sanely for the by-hand dev path.
+- **Only Caddy publishes to the host.** backend/frontend/db are internal to the compose
+  network. If direct API access on :8000 is ever wanted for dev, publish it explicitly.
+- **Postgres runs but nothing connects.** The db service completes the topology and is
+  healthchecked; no app code opens `DATABASE_URL` until 0.5. Intended, not scope creep.
+
+### Two footguns handled (both from the brief, both verified)
+- **`NEXT_PUBLIC_*` is baked at BUILD time.** Frontend Dockerfile declares `ARG` + `ENV`
+  before `npm run build`; compose passes the arg. Verified: the browser bundle calls
+  `/api`, and the card went green through the proxy.
+- **`output: standalone` omits `.next/static` and `public/`.** The runner stage copies all
+  three (`standalone`, then `static`, then `public`). Verified: a real CSS asset returned 200
+  with 30 KB, and the screenshot shows the styled page.
+
+### Verified
+- `docker compose config` valid; `docker compose build` → both images built.
+- `docker compose up -d` → all four containers up, **db healthy**, no crash loops. `ports`
+  confirms only caddy on `0.0.0.0:80`.
+- `curl http://localhost/api/health` → `{"status":"ok","environment":"development"}` (backend
+  reached through Caddy, prefix stripped).
+- `http://localhost` → 200, clinic name present, `/_next/static` CSS asset loads.
+- **Screenshot:** styled page, Geist font, **System OK** green — full loop containerised.
+- Backend logs show `WatchFiles` reloader active (bind-mount hot reload works).
+- `docker compose down` → clean; port 80 free.
+
+### Snags hit
+- **Docker Desktop had exited** between the user's confirmation and this build (`daemon not
+  reachable`, process gone). Relaunched `Docker Desktop.exe`; engine up in ~3s. Not a project
+  issue — the engine doesn't stay running on its own.
+
+### Suggested commit
+`chore: containerise with docker compose`
 
 ---
 
@@ -201,19 +252,17 @@ authority** — if it is absent, ask the user for it rather than proceeding on t
 
 ---
 
-## Next up — Step 0.4 (not started)
+## Next up — Step 0.5 (not started)
 
-Docker. **Blocked until WSL is fixed** — see the blocker note in START HERE.
+Wire Postgres into the app. The db container already runs (from 0.4).
 
-- Backend `Dockerfile` on `python:3.12-slim`.
-- Frontend `Dockerfile` **multi-stage** (deps / builder / runner) on **`node:24-alpine`**
-  (not 20 — see the decisions table), using the standalone output.
-- **The frontend Dockerfile needs `ARG NEXT_PUBLIC_API_URL` + `ENV` before `npm run build`.**
-  `NEXT_PUBLIC_*` is inlined at **build** time. Miss this and production calls `localhost`
-  from the user's browser and fails silently, looking like a CORS problem.
-- `docker-compose.yml` (local): db (`postgres:16-alpine` + healthcheck + named volume),
-  backend (`--reload`, bind mount), frontend, caddy on :80.
-- `Caddyfile`: `{$SITE_ADDRESS:http://localhost}`, `handle /api/*` → `strip_prefix /api` →
-  `reverse_proxy backend:8000`; `handle` → `reverse_proxy frontend:3000`.
+- `app/db.py` — SQLAlchemy engine with `pool_pre_ping`, `SessionLocal`, `get_db` dependency.
+- `app/models/__init__.py` — `DeclarativeBase` `Base`. **No models yet** (those are Phase 2).
+- Alembic configured. **Critical:** `alembic/env.py` must do
+  `config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])` and
+  `target_metadata = Base.metadata`. **Delete the url from `alembic.ini` entirely** — no
+  fallback, so nobody migrates prod by accident.
+- Generate one **empty** initial migration.
+- Checkpoint 0.5: `alembic upgrade head` works and the `alembic_version` table exists.
 
-Then stop at CHECKPOINT 0.4.
+Then stop at CHECKPOINT 0.5.

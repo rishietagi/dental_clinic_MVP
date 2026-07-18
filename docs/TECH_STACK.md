@@ -75,16 +75,27 @@ Pinned now so the environment is stable, but no code imports them until step 0.5
 | pytest | 9.1.1 | Test runner. |
 | httpx | 0.28.1 | HTTP client backing FastAPI's `TestClient`. |
 
+## Containers & infrastructure
+
+Local dev runs the whole stack via `docker compose up --build`. Verified with Docker engine
+29.6.1 / Compose v5.3.0.
+
+| Choice | Image / version | Why |
+|---|---|---|
+| Docker Compose | v5.3.0 | Orchestrates the four local services. `docker-compose.yml` at repo root. |
+| Frontend image | `node:24-alpine` | Multi-stage (deps/builder/runner), serves the Next.js standalone build. Node 24 to match the local toolchain. |
+| Backend image | `python:3.12-slim` | Runs uvicorn. |
+| Postgres | `postgres:16-alpine` | The db service. **Runs but nothing connects yet** — app wiring is step 0.5. |
+| Caddy | `caddy:2-alpine` | Reverse proxy and single entry point on `:80`. Routes `/api/*` → backend, else → frontend. |
+
 ## Chosen but not yet installed
 
-These are committed decisions from `BUILD_PLAN.md`, listed here so the table above can stay
+These are committed decisions from `BUILD_PLAN.md`, listed here so the tables above can stay
 limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Containers | Docker + Docker Compose — frontend image `node:24-alpine`, backend `python:3.12-slim` | Step 0.4 |
-| Proxy | Caddy | Step 0.4 |
-| Database | PostgreSQL (managed) | Step 0.5 |
+| Database (app wiring) | SQLAlchemy engine + Alembic against Postgres | Step 0.5 |
 | CI | GitHub Actions — tests only | Step 0.6 |
 | Auth | Managed — Supabase Auth or Clerk. Never self-rolled. | Phase 1 |
 | Hosting | Single VPS or PaaS — decided in Phase 7 | Phase 7 |

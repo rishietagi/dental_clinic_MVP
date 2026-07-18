@@ -34,7 +34,7 @@ person can be both dentist and admin without logging in twice.
 ## Current status
 
 - **Phase:** 0 — Foundation
-- **Step:** 0.3 — Next.js frontend shell
+- **Step:** 0.4 — Containerised with Docker Compose
 
 ### What actually exists
 
@@ -49,14 +49,32 @@ person can be both dentist and admin without logging in twice.
 - The card calls the backend's `/health` from the browser and shows loading, ok, or error.
 - shadcn/ui set up, with `button` and `card` added.
 
-Nothing else. No database, no models, no auth, no routing beyond the one page, no containers.
+**Infrastructure** (`docker-compose.yml`, `Caddyfile`)
+- The whole stack runs under Docker Compose: Caddy (`:80`) → frontend + backend, plus a
+  Postgres container. Caddy routes `/api/*` to the backend and everything else to the frontend.
+- Postgres runs but **nothing connects to it yet** — that's step 0.5.
 
-Docker Desktop is installed but **its engine will not start** — see the WSL blocker in
-[LOG.md](LOG.md). It is not needed until step 0.4.
+Nothing else. No database wiring, no models, no auth, no routing beyond the one page.
 
 ## How to run locally
 
-Requires [conda](https://docs.conda.io/) and Python 3.12.
+### With Docker (the whole stack)
+
+Requires Docker Desktop running.
+
+```bash
+docker compose up --build
+```
+
+Open **http://localhost** — clinic name + a green **System OK** card. The API is at
+`http://localhost/api/health` (Caddy strips `/api` and forwards to the backend). Stop with
+`docker compose down`.
+
+### By hand (per-service dev)
+
+Faster for iterating on one side. Two terminals.
+
+Requires [conda](https://docs.conda.io/) and Python 3.12 (backend) and Node.js 24 (frontend).
 
 ```bash
 # One-time: create the environment
