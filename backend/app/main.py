@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, patients
+from app.routers import appointments, auth, patients
 
 app = FastAPI(title="Dental Clinic Management System")
 
@@ -18,6 +18,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(patients.router)
+app.include_router(appointments.router)
 
 
 @app.get("/health")

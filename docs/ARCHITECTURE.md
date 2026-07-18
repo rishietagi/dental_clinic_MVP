@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 3.1 (Phase 3 begun).** This describes what is built, not what
+**Honest to the code as of step 3.2 (Phase 3 in progress).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -159,8 +159,8 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 3.1 there are four models — `staff_user`, `audit_log`, `patient`, `appointment` —
-plus the first `app/services/` module.
+As of 3.2 there are four models — `staff_user`, `audit_log`, `patient`, `appointment` —
+and two `app/services/` modules (`audit`, `appointments`).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -197,17 +197,25 @@ plus the first `app/services/` module.
   until Phase 4, so its FK constraint is deferred to 4.2 (a first booking has no treatment; a
   follow-up does). `start_time` (timestamptz), `duration_min` (default 30), `status` (default
   `booked` — the transition *workflow* is 3.5, this step is only the column), `reason` (free
-  text), `created_at`/`updated_at`. No `relationship()` navigations yet. No endpoints — booking
-  is 3.2.
+  text), `created_at`/`updated_at`. No `relationship()` navigations yet. Endpoints arrived in 3.2
+  (see the booking API below).
+- **`app/services/appointments.py`** — the **second `services/` module** (3.2). `find_conflicts()`
+  is the app-side half of double-booking prevention: it returns non-cancelled appointments for the
+  same dentist whose half-open time span `[start, start+duration)` overlaps a proposed slot. It's a
+  UX layer (a friendly 409) on top of the real guarantee, which is the DB constraint — the two use
+  the identical UTC `tsrange` overlap expression so they always agree. Returns `[]` for an
+  unassigned (`dentist_id is None`) slot.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
 controls — which is exactly what the 1.3 auth chain does (verify JWT → `sub` → `staff_user` by
 PK → roles).
 
-`get_db` is used by `get_current_staff` and by the patient routes. Routes so far: `/health`,
-`/me`, `/admin/ping`, and the **patient CRUD** (`POST /patients`, `GET/PATCH /patients/{id}`,
-`POST /patients/{id}/archive|unarchive`).
+`get_db` is used by `get_current_staff` and by the patient/appointment routes. Routes so far:
+`/health`, `/me`, `/admin/ping`, the **patient CRUD** (`POST /patients`, `GET/PATCH
+/patients/{id}`, `POST /patients/{id}/archive|unarchive`), and the **appointment booking API**
+(`POST /appointments`, `GET /appointments/{id}`, `GET /appointments?date=`, `PATCH
+/appointments/{id}`).
 
 ### First resource API (patients — step 2.2)
 
@@ -224,6 +232,37 @@ name **or** phone (plain `ILIKE` — no index needed at clinic scale; a `pg_trgm
 escalation path if the table grows), with `include_archived`, `limit`/`offset`, and a `total`
 count. List rows use a lighter `PatientListItem` that **omits `medical_notes`** — sensitive notes
 are only returned by `GET /patients/{id}`, never in bulk.
+
+### Booking API + double-booking prevention (appointments — step 3.2)
+
+The appointment endpoints (`app/routers/appointments.py`, schemas in
+`app/schemas/appointment.py`) follow the patient-router shape exactly — `get_current_staff` on
+every route, audited mutations, ids as path params (the day filter is a query *date*, not a
+patient identifier, so it's allowed). `POST` books (404 if the patient is unknown),
+`GET /{id}` reads, `GET ?date=YYYY-MM-DD` lists a day ordered by start time (the 3.3 day-view's
+data source), and `PATCH` reschedules.
+
+**Double-booking prevention lives in two layers, and the DB layer is the real one:**
+
+1. **The database — a GiST `EXCLUDE` constraint (`appointment_no_overlap`).** It makes two
+   overlapping, non-cancelled appointments for the *same dentist* physically impossible to store,
+   enforced atomically at commit. This is what survives the race BUILD_PLAN §11 warns about — two
+   clinic PCs booking the same slot at the same instant cannot both succeed. Overlap is defined on
+   half-open ranges `[start, start + duration_min)`, so back-to-back slots (…10:30 and 10:30…) do
+   **not** clash. The `WHERE (status <> 'cancelled')` clause means a cancelled slot frees its time.
+   `dentist_id WITH =` treats NULLs as distinct, so unassigned bookings never conflict.
+2. **The service — `find_conflicts()`.** Runs the same overlap test in the app before inserting so
+   the ordinary case returns a friendly **409** with a clear message. The router's
+   `_commit_or_conflict` also catches the constraint's `IntegrityError` (the race that slips past
+   the pre-check) and translates it to the **same 409**, never a 500.
+
+**Immutability detail (why the constraint expression looks the way it does):** a constraint/index
+expression must be IMMUTABLE, but `timestamptz + interval` is only STABLE (it depends on the
+session TimeZone). So both the constraint and `find_conflicts` build the range in UTC wall-clock:
+`tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min * interval '1
+minute', '[)')`. `timezone('UTC', ts)` casts to a fixed-zone plain `timestamp` (immutable) and
+plain `timestamp + interval` is immutable. Two appointments overlap in real time iff their UTC
+representations overlap, so the rewrite is equivalent.
 
 ### Frontend patient page + first navigation (2.3)
 
@@ -262,9 +301,13 @@ how the schema evolves without losing patient records.
 
 - Migration files live in `backend/alembic/versions/`. Each has a `revision` id and a
   `down_revision` pointing at the previous one, forming an ordered chain Alembic walks on
-  `upgrade`/`downgrade`. The first (and currently only) migration is **empty** —
-  `78e9327c7254`, with `down_revision = None` (the root).
+  `upgrade`/`downgrade`. The root is the **empty** `78e9327c7254` (`down_revision = None`); the
+  current head is `feae714ecef5` (the appointment no-overlap constraint).
 - Alembic tracks which revision the database is at in an `alembic_version` table it manages.
+- Most migrations are **autogenerated** (`--autogenerate` diffs `Base.metadata` against the live
+  DB). The exception is `feae714ecef5` (3.2), the first **hand-written** migration: autogenerate
+  cannot express a GiST `EXCLUDE` constraint or `CREATE EXTENSION`, so its body is raw
+  `op.execute(...)` SQL. It also needs the `btree_gist` extension, which the migration creates.
 - **The DB URL is not in `alembic.ini`.** That line was deleted; `alembic/env.py` reads
   `os.environ["DATABASE_URL"]` instead. No fallback means a migration **cannot run** without
   an explicit `DATABASE_URL` — so nobody can accidentally migrate the wrong database. Proven:

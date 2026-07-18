@@ -15,18 +15,25 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 HAS BEGUN.** Phase 2 is complete (2.1–2.5). **Step 3.1 is done:**
-the `appointment` model + migration `56fda58b828c` (the schema's **first table with foreign
-keys**). **Next is step 3.2** — booking API + double-booking prevention. Now **five migrations**
-(head = `56fda58b828c`). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev
-patients) — no appointment seed yet.
+**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1 + 3.2 done:**
+the `appointment` model + FKs (3.1, migration `56fda58b828c`), then the **booking API +
+double-booking prevention** (3.2, migration `feae714ecef5`). **Next is step 3.3** — day-view
+calendar (first appointment UI). Now **six migrations** (head = `feae714ecef5`). Two seed scripts:
+`app.seed` (admin) and `app.seed_patients` (dev patients) — no appointment seed yet.
 
 **Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
 `dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` is a
-bare nullable UUID with NO foreign key** — the `treatment` table doesn't exist until Phase 4, so
-its FK constraint is deferred to 4.2. `status` defaults to `booked` (the transition *workflow* is
-3.5); `duration_min` defaults to 30. No `relationship()` navigations, no CHECK/enum on `status`
-yet, no appointment endpoints (that's 3.2).
+bare nullable UUID with NO foreign key** — deferred to 4.2. `status` defaults to `booked` (the
+transition *workflow* is 3.5); `duration_min` defaults to 30.
+
+**Booking rules (3.2):** endpoints are `POST /appointments`, `GET /appointments/{id}`,
+`GET /appointments?date=YYYY-MM-DD` (day list), `PATCH /appointments/{id}` (reschedule) — all
+guarded by `get_current_staff`, all mutations audited. **Double-booking is prevented by a Postgres
+GiST EXCLUDE constraint `appointment_no_overlap`** (the DB is the real guarantee; the service's
+`find_conflicts` pre-check is just for a friendly 409, and an IntegrityError from the constraint is
+translated to the same 409). Overlap = half-open `[start, start+duration)` in **UTC wall-clock**,
+same dentist, ignoring `cancelled`. NULL dentist never conflicts. No status transitions / cancel
+endpoint yet (3.5). No appointment UI yet (3.3).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -91,6 +98,7 @@ the original step instructions say otherwise:
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
 | **appointment.treatment_id has NO FK yet** | ERD shows `treatment_id FK` | `treatment` doesn't exist until Phase 4. `treatment_id` is a bare **nullable UUID column** now (so 3.2 can reference it and the shape matches the ERD); the actual FK constraint is added in **Phase 4 (4.2)** once `treatment` exists. A test asserts a random `treatment_id` inserts fine (proves the deferral). `patient_id`/`dentist_id` ARE real FKs. | `backend/app/models/appointment.py` |
+| **Double-booking = GiST EXCLUDE constraint (first hand-written migration)** | — | `appointment_no_overlap` is a Postgres `EXCLUDE USING gist` constraint — the real double-booking guarantee (survives two racing PCs). **First hand-written migration** (autogenerate can't emit EXCLUDE / CREATE EXTENSION); needs the **`btree_gist`** extension. The range must use **immutable** arithmetic: `timestamptz + interval` is only STABLE and Postgres rejects it in a constraint, so we use `tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min*interval '1 min', '[)')`. The service `find_conflicts` pre-check uses the SAME expression (keep them in sync). Excludes `cancelled`; NULL dentist never clashes. | `backend/alembic/versions/feae714ecef5_*.py`, `backend/app/services/appointments.py` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
 **Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
@@ -104,6 +112,79 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.2: booking API + double-booking prevention
+
+**Status:** complete — schemas + service + router + hand-written migration + tests, verified
+against the real Docker Postgres (constraint applied + reversible, 54 tests pass, live through
+Caddy). For commit. **First appointment endpoints; first hand-written migration.**
+
+### Scope decisions (confirmed with user)
+- **Double-booking enforced by a Postgres GiST `EXCLUDE` constraint** — the DB rejects overlapping
+  non-cancelled appointments for the same dentist atomically (survives two racing PCs, BUILD_PLAN
+  §11). The service also pre-checks for a friendly **409**; a constraint `IntegrityError` that
+  slips past the pre-check (the race) is translated to the same 409, not a 500.
+- **Cancelled slots don't block** — the constraint's `WHERE (status <> 'cancelled')` frees a
+  cancelled slot's time. No cancel endpoint yet (3.5), but building it now = no migration change in 3.5.
+- **Endpoints:** `POST /appointments` (conflict-checked, 404 if patient missing), `GET
+  /appointments/{id}`, `GET /appointments?date=YYYY-MM-DD` (day list, for 3.3), `PATCH
+  /appointments/{id}` (reschedule, re-checks excluding itself). **No status transitions** (3.5).
+
+### Built
+- `app/schemas/appointment.py` — `AppointmentCreate` (no `status`; `duration_min` default 30,
+  `ge=5`), `AppointmentUpdate` (all optional, PATCH), `AppointmentRead`, `AppointmentListResponse`.
+- `app/services/appointments.py` — **second `services/` module.** `find_conflicts(...)` returns
+  overlapping non-cancelled appointments for the same dentist (`[]` when `dentist_id is None`);
+  `exclude_id` skips the row being rescheduled. Uses the **same UTC `tsrange` expression as the
+  constraint** so pre-check and backstop agree.
+- `app/routers/appointments.py` — the four endpoints, guarded by `get_current_staff`, mutations
+  audited (`entity="appointment"`). `_commit_or_conflict` maps the `appointment_no_overlap`
+  IntegrityError → 409. Registered in `app/main.py`.
+- `alembic/versions/feae714ecef5_add_appointment_no_overlap_constraint.py` — **hand-written**
+  (empty revision then filled). `down_revision = 56fda58b828c`. `CREATE EXTENSION btree_gist` +
+  the EXCLUDE constraint; downgrade drops both.
+- `tests/test_appointments.py` — 16 endpoint tests (patient-router template): create+audit,
+  defaults, patient-404, get/404, **overlap→409**, **back-to-back OK** (half-open `[)`), different-
+  dentist OK, NULL-dentist OK, **cancelled-doesn't-block**, **DB-constraint-is-the-backstop** (insert
+  a clash straight through the ORM → IntegrityError), list-by-day (ordered), reschedule (+ onto-
+  another→409, + self-no-false-conflict).
+
+### No new deps / env / CI
+SQLAlchemy + native Postgres. `btree_gist` is a DB extension enabled by the migration, not a pip
+package. CI's Postgres + `alembic upgrade head` + pytest cover it.
+
+### Bug hit + fixed during build (worth remembering)
+The first constraint used `start_time + make_interval(mins => duration_min)` inside the EXCLUDE —
+Postgres rejected it: **"functions in index expression must be marked IMMUTABLE."** `timestamptz +
+interval` is only **STABLE** (depends on the session TimeZone). Fix (verified against the DB before
+committing to it): cast to a fixed zone first — `timezone('UTC', start_time)` (immutable) → plain
+`timestamp`, then `+ interval` (immutable), in a plain `tsrange`. Two appointments overlap in real
+time iff their UTC representations overlap, so it's equivalent. The service's `find_conflicts` uses
+the identical expression.
+
+### Verified (against the real db)
+- Migration applied `56fda58b828c -> feae714ecef5`; `\d appointment` shows the `appointment_no_overlap`
+  EXCLUDE constraint. **Reversible:** downgrade drops the constraint **and** `btree_gist`; upgrade
+  re-adds. (Rebuilt the backend image before applying — the stale-image footgun.)
+- **54 tests pass** in-container (38 prior + 16 appointment) against real Postgres. Host DB-skip
+  path still holds.
+- **Live through Caddy:** `/api/health` 200; `/api/appointments` GET+POST with no token → **401**
+  (route wired, guard active); backend startup clean, no warnings.
+
+### Gotcha (recorded from 3.1, hit again)
+Generating/bind-mounting migrations must run from **PowerShell**, not the Bash tool — Git Bash
+`${PWD}` (`/c/...`) doesn't map for Docker Desktop, so the file lands in the ephemeral `--rm`
+container and is lost.
+
+### Carried forward → 3.3
+- API is ready for the **day-view calendar** (`GET /appointments?date=` feeds it). No frontend yet.
+  Reschedule exists but no drag-drop (3.4). Status transitions + cancel are 3.5. `treatment_id` FK
+  still deferred to Phase 4.
+
+### Suggested commit
+`feat: add booking with conflict checks`
 
 ---
 
