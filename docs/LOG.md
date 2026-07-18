@@ -22,9 +22,13 @@ auth) even in local mode — confirm the approach with the user before building.
 
 **The working rules that matter most** (CLAUDE.md is the authority; this is the fallback copy):
 - Plan mode first. No file changes before the user approves.
-- **Never run git.** No init/add/commit/push/branch/merge, no touching `.git/`. The user
-  stages, commits, and pushes. At a checkpoint, say it's ready and suggest a message —
-  nothing more.
+- **Never run *mutating* git.** No add/commit/push/pull/branch/merge/rebase/tag/reset/stash,
+  no touching `.git/`. The user stages, commits, and pushes. At a checkpoint, say it's ready
+  and suggest a message — nothing more.
+  - **Read-only git IS allowed** (user clarified): `git status`, `git log`, `git diff`,
+    `git branch --show-current`, `git show`. Use `git status` when it helps at a checkpoint.
+    (This refines CLAUDE.md's blanket "never run git" — the intent was to own commits/history,
+    not to ban inspecting state.)
 - One step at a time. Never build ahead into the next step or phase.
 - Ask before adding any dependency not in the agreed tech stack.
 - Stop at every checkpoint and wait.
