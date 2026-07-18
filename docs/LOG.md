@@ -15,11 +15,11 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1–2.4 done** —
-patient model (2.1), CRUD API (2.2), list + search (2.3), and the **profile page** (2.4:
-`/patients/{id}` demographics + the medical-notes banner; list rows now link into it; the app's
-**first dynamic route**). Next is **step 2.5** (seed ~50 fake patients) — the last step of
-Phase 2. Still **four migrations** (2.4 was frontend-only, no backend/API/migration change).
+**Where we are:** **PHASE 2 IS COMPLETE** (2.1–2.5 done). patient model (2.1), CRUD API (2.2),
+list+search (2.3), profile page + medical-notes banner (2.4), and **~50 fake patients seeded**
+(2.5, `python -m app.seed_patients`). **Next is Phase 3 — Appointments**, starting with **step
+3.1** (`appointment` model + migration). Still **four migrations** (2.5 was a script — no schema
+change). Two seed scripts now: `app.seed` (admin) and `app.seed_patients` (dev patients).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -83,6 +83,7 @@ the original step instructions say otherwise:
 | **Migrations ship in the image** | — | `alembic upgrade head` runs from the built image, so **rebuild the backend image after adding a migration** before applying — otherwise Alembic uses the image's stale copy and silently no-ops ("already at head"). Generating a migration uses a `-v backend:/app` bind mount so the file lands on the host. | `backend/Dockerfile` |
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
+| **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
 **Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
 2.9.3.0 / kernel 6.18.35.2, Docker engine 29.6.1 (linux, overlayfs), Compose v5.3.0,
@@ -95,6 +96,48 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 2.5: seed ~50 fake patients (PHASE 2 COMPLETE)
+
+**Status:** complete — script + tests, verified against the real Docker Postgres (seeds 50,
+idempotent on re-run, 33 tests pass). For commit. **This finishes Phase 2.**
+
+### Scope decisions (confirmed with user)
+- **Hand-rolled Indian name pools + stdlib `random`** — **no faker / no new dependency.**
+- **Idempotent via a count guard** — if `patient count >= SEED_COUNT (50)`, skip (no dup pile-up).
+  Never wipe/hard-delete patient rows (soft-delete rule holds even for fake data).
+- **One summary audit row** (`action="seed", entity="patient", details={"count":50}`), not 50.
+
+### Built
+- `app/seed_patients.py` (`python -m app.seed_patients`) — split into **`generate_patients()`**
+  (pure, deterministic per seed, no DB — unit-testable) and **`seed_patients()`** (count-guard
+  idempotency + `session.add_all` + one summary `record_audit` + commit). ~30 first / 25 last
+  Karnataka-plausible names, `+91` mobiles (10 digits starting 6–9), DOB→age ~5–85, ~20% with
+  `medical_notes`, ~10% archived. Lets the DB fill `id`/timestamps.
+- `tests/test_seed_patients.py` — generator unit tests (count, field shape, determinism —
+  **no DB, run everywhere**) + a light DB persistence test (insert a few, confirm, clean up).
+
+### No new deps / migration / env / CI
+
+### Verified (real db)
+- Generator tests pass on the host (no DB). Full suite **33 passed** in-container.
+- Seed run: 2 pre-existing + 50 → **52 total**, **12 with notes**, **5 archived**; realistic
+  Indian names + `+91` phones. **Summary audit row** `seed/patient {"count":50}` present.
+  **Re-run → "already seeded (52 present), skipping"** (idempotent, count unchanged).
+
+### Known cosmetic quirk (harmless)
+Name and gender are randomized independently, so a seeded row can pair a typically-male first
+name with gender "Female" (e.g. "Aarav … Female"). It's fake dev data; not worth gender-tagged
+name pools. Noted here so it isn't mistaken for a bug.
+
+### PHASE 2 COMPLETE
+Patients: model, CRUD API (auth + audit + soft-delete), list/search, profile + medical-notes
+banner, and seed data. The whole patient loop works against ~50 realistic records.
+
+### Suggested commit
+`chore: add seed data script`
 
 ---
 

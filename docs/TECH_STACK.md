@@ -87,10 +87,12 @@ module), and **`patient`** (2.1 — soft-delete via `archived`, stores `date_of_
 computed `age` property). **Four migrations now:** empty root → `add_staff_user` →
 `add_audit_log` → `add_patient`.
 
-Backend app structure as of 2.2: `app/models/` (ORM), `app/schemas/` (Pydantic request/response
-contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (`audit`), plus
-`auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is the
-first full resource API; **2.3 added `GET /patients` list+search** (plain `ILIKE`, no index yet).
+Backend app structure as of 2.5: `app/models/` (ORM), `app/schemas/` (Pydantic request/response
+contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (`audit`), two seed
+scripts (`app/seed.py` admin, `app/seed_patients.py` ~50 dev patients — stdlib only, no faker),
+plus `auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is
+the first full resource API; **2.3 added `GET /patients` list+search** (plain `ILIKE`, no index
+yet). **Phase 2 is complete.**
 
 Frontend as of 2.4: the patient list `app/patients/` (search box + Tailwind results table) and
 the **profile page** `app/patients/[id]/` — the app's **first dynamic route** — with the

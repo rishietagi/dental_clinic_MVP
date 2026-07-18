@@ -1,6 +1,7 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 2.4.** This describes what is built, not what is planned.
+**Honest to the code as of step 2.5 (Phase 2 complete).** This describes what is built, not what
+is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -238,6 +239,12 @@ no-id-in-URL rule is about query strings).
 `ADMIN_NAME` (idempotent — safe to re-run). `ADMIN_USER_ID` is the admin's Supabase UUID, so the
 seeded row's PK matches their Auth identity. Run it once per environment after migrating:
 `docker compose run --rm backend python -m app.seed`.
+
+`python -m app.seed_patients` (step 2.5) is a **dev-data** seed: ~50 fake patients (hand-rolled
+Indian names, stdlib random, no faker). Idempotent via a count guard (skips if ≥50 already
+present; never deletes patient rows). Writes one summary audit row. Split into a pure
+`generate_patients()` (unit-testable) and the DB `seed_patients()`. **Fake data only** — no real
+patient data on a dev machine until Phase 7.
 
 ## Migrations (Alembic)
 
