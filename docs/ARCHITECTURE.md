@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 2.1.** This describes what is built, not what is planned.
+**Honest to the code as of step 2.2.** This describes what is built, not what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -195,9 +195,19 @@ authorization. Keeping `roles` in our Postgres means role checks are plain SQL t
 controls — which is exactly what the 1.3 auth chain does (verify JWT → `sub` → `staff_user` by
 PK → roles).
 
-`get_db` is now used by `get_current_staff` (via `/me` and any role-guarded route). The only
-routes so far are `/health`, `/me`, and `/admin/ping`; resource endpoints (patients etc.) arrive
-in Phase 2 and will hang off `require_role(...)`.
+`get_db` is used by `get_current_staff` and by the patient routes. Routes so far: `/health`,
+`/me`, `/admin/ping`, and the **patient CRUD** (`POST /patients`, `GET/PATCH /patients/{id}`,
+`POST /patients/{id}/archive|unarchive`).
+
+### First resource API (patients — step 2.2)
+
+The patient endpoints (`app/routers/patients.py`, schemas in `app/schemas/patient.py`) are where
+the full stack finally runs end to end: **auth** (`get_current_staff` guards every route — any
+active staff) → **model** (`Patient`) → **DB** (`get_db`), and every mutation writes an
+**audit** row via `record_audit` in the *same transaction* as the change (one `db.commit()`), so
+the change and its audit entry are atomic. Reads are not audited. Deletes are **soft**
+(`archived` flag) — there is no hard-delete route. Patient ids are path params, never query
+strings.
 
 ### Seeding (`app/seed.py`)
 

@@ -15,11 +15,12 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Step 2.1 is done** —
-the `patient` model + migration. Next is **step 2.2** (patient CRUD API + tests) — the first
-real resource endpoints, which must use `Depends(require_role(...))` and call `record_audit`
-on mutations. **Four migrations now** (empty root → staff_user → audit_log → patient). The
-patient table is model-only so far: no endpoints, no search, no seed (those are 2.2–2.5).
+**Where we are:** **Phase 1 complete; Phase 2 (Patients) in progress.** **Steps 2.1 and 2.2 are
+done** — the `patient` model + migration (2.1) and the patient **CRUD API** (2.2:
+create/read-one/update/archive/unarchive, auth-guarded, audited, soft-delete only). Next is
+**step 2.3** (list + search by name/phone — and the name/phone indexes deferred from 2.1).
+**Four migrations** (empty root → staff_user → audit_log → patient). No frontend patient UI yet
+(2.4); no list/search endpoint yet (2.3).
 
 **Patient rules to hold onto:** soft-delete only via `archived` (never hard-delete — medico-
 legal retention); `medical_notes` is one free-text field (banner later); **DOB is stored, not a
@@ -95,6 +96,63 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-18 — Step 2.2: patient CRUD API + tests
+
+**Status:** complete — router + schemas + tests, verified (25 tests pass in-container; full CRUD
+proven live through Caddy with a real ES256 token, incl. the audit trail). Torn down clean.
+For commit. **First real resource API** — where Phase 1's auth + audit machinery gets used.
+
+### Scope decisions (confirmed with user)
+- **Single-resource CRUD only** (create / read-one / update / archive / unarchive). **List +
+  search are 2.3** — no `GET /patients` list here.
+- **All active staff can do everything** (receptionist/dentist/admin) — so every route guards
+  with `get_current_staff` ("any active staff"), no per-endpoint role split.
+- **Audit mutations only** — create/update/archive/unarchive write an audit row; reads don't.
+- **Soft-delete only** — archive flips `archived`; no hard DELETE route exists.
+
+### Built
+- `app/schemas/__init__.py` + `app/schemas/patient.py` — **first `schemas/` package.**
+  `PatientCreate` (name required), `PatientUpdate` (all optional, PATCH), `PatientRead`
+  (`from_attributes`, includes the computed `age`; explicit fields = no column leakage).
+- `app/routers/patients.py` (`prefix="/patients"`):
+  - `POST /patients` (201), `GET /patients/{id}` (404 if missing; returns archived too),
+    `PATCH /patients/{id}` (partial via `exclude_unset`; skips empty patches),
+    `POST /patients/{id}/archive` + `/unarchive`.
+  - Every mutation calls `record_audit(db, actor_id=staff.id, entity="patient", …)` then a
+    single `db.commit()` — the change and its audit row commit **atomically**. `details` via
+    `jsonable_encoder` so dates land clean in JSONB.
+  - `patient_id` is a **path** param, never a query string (hard rule). `_get_or_404` helper.
+- `app/main.py` — `include_router(patients.router)`.
+- `tests/test_patients.py` — DB-backed. Auth faked via `dependency_overrides[get_current_claims]`
+  = `{"sub": <created staff id>}` (same trick as test_auth). Cases: create→201 + audit,
+  no-auth→401, get 200/404, patch changes only sent fields + audit, archive/unarchive soft (row
+  still fetchable) + audit.
+
+### No new deps / env / CI
+FastAPI/Pydantic/SQLAlchemy already present; CI Postgres + tests cover it.
+
+### Verified
+- **25 tests pass** in-container against real Postgres (20 prior + 5 patient-endpoint).
+- **Live through Caddy** with a real token (test@clinic.local temp-seeded as staff):
+  CREATE→201 (`age=41` from DOB, `archived=false`), GET→200, PATCH phone-only (name untouched),
+  ARCHIVE→`archived=true` **and still fetchable** (soft-delete), unknown id→404, no-token→401.
+  `audit_log` showed `create` (all fields), `update` (`{"phone": …}`), `archive` rows with the
+  actor's id. Temp data cleaned up; stack down clean.
+
+### Gotcha (test script, not the app)
+PowerShell `$PID` is a read-only automatic variable, and `$global:` vars don't survive between
+separate PowerShell tool calls — the first live-test attempt failed for both reasons. Fixed by
+using a non-reserved var and one self-contained script. No app issue.
+
+### Carried forward → 2.3
+- Add `GET /patients` list + search by name/phone, pagination, and the **name/phone indexes**
+  deferred from 2.1. List should default to non-archived.
+
+### Suggested commit
+`feat: add patient CRUD endpoints`
 
 ---
 

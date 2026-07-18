@@ -87,6 +87,11 @@ module), and **`patient`** (2.1 — soft-delete via `archived`, stores `date_of_
 computed `age` property). **Four migrations now:** empty root → `add_staff_user` →
 `add_audit_log` → `add_patient`.
 
+Backend app structure as of 2.2: `app/models/` (ORM), `app/schemas/` (Pydantic request/response
+contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (`audit`), plus
+`auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is the
+first full resource API.
+
 | Choice | Version | Why |
 |---|---|---|
 | SQLAlchemy | 2.0.51 | ORM and data access layer. Engine with `pool_pre_ping`; `SessionLocal`; `get_db` dependency. |
