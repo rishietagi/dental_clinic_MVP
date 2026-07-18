@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.db import SessionLocal
 from app.models.staff_user import StaffUser
+from app.services.audit import record_audit
 
 # The mother is both dentist and admin under one login — the canonical
 # roles-as-a-set case. Receptionists would get ["receptionist"].
@@ -63,9 +64,21 @@ def seed_admin() -> None:
             existing.roles = ADMIN_ROLES
             existing.active = True
             action = "updated"
+
+        # Record the seed as a system action (no logged-in actor). Written in the
+        # same session so it commits atomically with the upsert above.
+        record_audit(
+            session,
+            actor_id=None,
+            action="seed",
+            entity="staff_user",
+            entity_id=admin_id,
+            details={"result": action, "roles": ADMIN_ROLES},
+        )
         session.commit()
 
     print(f"seed: admin {action} — {email} ({admin_id}) roles={ADMIN_ROLES}")
+    print(f"seed: audit_log entry written (action=seed, entity=staff_user)")
 
 
 if __name__ == "__main__":

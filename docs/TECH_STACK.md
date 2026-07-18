@@ -80,9 +80,10 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 ## Database access
 
 Wired into the app as of step 0.5: engine + session in `app/db.py`, `Base` in
-`app/models/`, Alembic configured. **First real model as of step 1.2:** `staff_user`
-(`app/models/staff_user.py`) with a Postgres `ARRAY(Text)` roles column and a UUID PK that
-equals the Supabase Auth user's UUID. Two migrations now: the empty root and `add_staff_user`.
+`app/models/`, Alembic configured. Models so far: **`staff_user`** (1.2 — `ARRAY(Text)` roles,
+UUID PK = the Supabase Auth UUID) and **`audit_log`** (1.4 — append-only trail with a `JSONB`
+`details` column, written via `app/services/audit.py::record_audit`, the first `services/`
+module). **Three migrations now:** the empty root → `add_staff_user` → `add_audit_log`.
 
 | Choice | Version | Why |
 |---|---|---|

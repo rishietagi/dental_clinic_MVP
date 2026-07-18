@@ -1,6 +1,7 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 1.3.** This describes what is built, not what is planned.
+**Honest to the code as of step 1.4 (Phase 1 complete).** This describes what is built, not
+what is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
 
@@ -158,7 +159,8 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 1.2 there is one model: `staff_user`.
+As of 1.4 there are two models — `staff_user` and `audit_log` — plus the first
+`app/services/` module.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -171,6 +173,18 @@ As of 1.2 there is one model: `staff_user`.
   UUID** (the JWT `sub`) — one identity, no separate linking column. `roles` is a Postgres
   `ARRAY(Text)` holding the set of roles (e.g. `["dentist","admin"]`), never a single string.
   `active` soft-disables a login; `email` mirrors the Supabase login email (unique).
+
+- **`app/models/audit_log.py`** — `AuditLog`, the append-only "who changed what" trail
+  (BUILD_PLAN §11). `id` is server-generated (`gen_random_uuid()`); `actor_id` is the acting
+  `staff_user` (**nullable, no FK** — null = a system/seed action, and the trail must outlive the
+  entities it references); `action`/`entity`/`entity_id` say what happened to which row;
+  `details` is nullable `JSONB` for context (a small, deliberate extension beyond the ERD). Rows
+  are only ever inserted.
+- **`app/services/audit.py` → `record_audit(db, *, actor_id, action, entity, entity_id, details)`**
+  — the single way anything writes an audit row. It inserts into the **caller's** session and
+  flushes but does **not** commit, so the audit entry and the change it records commit atomically
+  in one transaction. Phase 2 mutation endpoints call it with `actor_id=current_staff.id`; the
+  seed calls it with `actor_id=None`.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
