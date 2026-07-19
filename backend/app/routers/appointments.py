@@ -111,17 +111,39 @@ def create_appointment(
 
 @router.get("", response_model=AppointmentListResponse)
 def list_appointments(
-    date_: date = Query(alias="date", description="Day to list (YYYY-MM-DD)."),
+    date_: date | None = Query(default=None, alias="date", description="A single day (YYYY-MM-DD)."),
+    from_: date | None = Query(default=None, alias="from", description="Range start (inclusive)."),
+    to: date | None = Query(default=None, description="Range end (inclusive)."),
     db: Session = Depends(get_db),
     staff: StaffUser = Depends(get_current_staff),
 ) -> AppointmentListResponse:
-    """All appointments starting on the given day, ordered by start time.
+    """Appointments in a day OR a date range, ordered by start time.
 
-    The day-view calendar (3.3) is the first consumer. `date` is a query date, not
-    a patient identifier, so it's fine in the query string.
+    Two mutually exclusive forms — pass EXACTLY one:
+    - `date=YYYY-MM-DD` → that single day (the day-view calendar).
+    - `from=…&to=…` → the inclusive range from `from` 00:00 to `to` 23:59 (the
+      week-view calendar).
+
+    These are query dates, not patient identifiers, so they're fine in the query
+    string.
     """
-    day_start = datetime.combine(date_, time.min, tzinfo=timezone.utc)
-    day_end = datetime.combine(date_, time.max, tzinfo=timezone.utc)
+    if date_ is not None:
+        if from_ is not None or to is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Pass either `date` or `from`+`to`, not both.",
+            )
+        range_start, range_end = date_, date_
+    elif from_ is not None and to is not None:
+        range_start, range_end = from_, to
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pass either `date` or both `from` and `to`.",
+        )
+
+    day_start = datetime.combine(range_start, time.min, tzinfo=timezone.utc)
+    day_end = datetime.combine(range_end, time.max, tzinfo=timezone.utc)
 
     # Join the patient (always present) and the dentist (nullable → outerjoin) so
     # each row carries the names the calendar needs — one query, no N+1.

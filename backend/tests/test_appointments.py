@@ -399,6 +399,53 @@ def test_list_items_carry_names(as_staff):
     assert by_patient["Walk-in Patient"]["dentist_name"] is None
 
 
+def test_list_by_range(as_staff):
+    """from/to returns appointments across the inclusive range, excluding outside."""
+    client, _ = as_staff
+    pid = _make_patient()
+
+    # One on the 2nd, one on the 4th (inside), one on the 6th (outside the range).
+    _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(day=2, hour=9)))
+    _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(day=4, hour=9)))
+    _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(day=6, hour=9)))
+
+    body = client.get(
+        "/appointments", params={"from": "2030-08-02", "to": "2030-08-04"}
+    ).json()
+    assert body["total"] == 2
+    days = {item["start_time"][:10] for item in body["items"]}
+    assert days == {"2030-08-02", "2030-08-04"}
+    # Ordered by start_time.
+    times = [item["start_time"] for item in body["items"]]
+    assert times == sorted(times)
+
+
+def test_list_range_boundaries_inclusive(as_staff):
+    """Both endpoints of the range are inclusive (a single-day range = date=)."""
+    client, _ = as_staff
+    pid = _make_patient()
+    _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(day=5, hour=23, minute=45)))
+
+    body = client.get(
+        "/appointments", params={"from": "2030-08-05", "to": "2030-08-05"}
+    ).json()
+    assert body["total"] == 1
+
+
+def test_list_requires_exactly_one_form(as_staff):
+    """Neither date nor from/to, or both, is a 422."""
+    client, _ = as_staff
+    # Neither.
+    assert client.get("/appointments").status_code == 422
+    # Both.
+    assert client.get(
+        "/appointments",
+        params={"date": "2030-08-02", "from": "2030-08-02", "to": "2030-08-03"},
+    ).status_code == 422
+    # from without to (incomplete range) -> also 422.
+    assert client.get("/appointments", params={"from": "2030-08-02"}).status_code == 422
+
+
 # --- reschedule --------------------------------------------------------------
 
 def test_reschedule(as_staff):

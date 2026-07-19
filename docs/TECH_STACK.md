@@ -65,6 +65,12 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 | lucide-react | ^1.24.0 | Icon set shadcn components use. |
 | tw-animate-css | ^1.4.0 | Animation utilities for Tailwind 4. |
 
+**Chosen deliberately** (approved additions beyond the scaffold):
+
+| Choice | Version | Why |
+|---|---|---|
+| @dnd-kit/core | ^6.3.1 | Pointer-based drag-and-drop for the week-view calendar's drag-drop reschedule (step 3.4). Modular + React-19-compatible; `core` alone (no `/sortable` or `/modifiers`) — snapping comes from discrete droppable (day, slot) cells. Pulls `@dnd-kit/accessibility` + `@dnd-kit/utilities`. |
+
 ## Backend
 
 | Choice | Version | Why |

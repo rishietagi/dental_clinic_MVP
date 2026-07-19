@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { DayView } from "./day-view";
+import { CalendarView } from "./calendar-view";
 
 // Calendar route. Protected by proxy.ts (any signed-in user reaches the app) and
 // by the API (active-staff on the data call). Server shell; the interactive day
@@ -12,7 +12,7 @@ export default function CalendarPage() {
         ← Dental Clinic
       </Link>
       <h1 className="text-2xl font-semibold tracking-tight">Calendar</h1>
-      <DayView />
+      <CalendarView />
     </main>
   );
 }

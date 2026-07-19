@@ -15,12 +15,22 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.3 done:**
+**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.4 done:**
 the `appointment` model + FKs (3.1, migration `56fda58b828c`), the **booking API + double-booking
-prevention** (3.2, migration `feae714ecef5`), and the **day-view calendar** (3.3, `/calendar` +
-day-list names, no migration). **Next is step 3.4** — week view + drag-drop reschedule. Still **six
-migrations** (head = `feae714ecef5`; 3.3 was query/UI only). Two seed scripts: `app.seed` (admin)
-and `app.seed_patients` (dev patients) — no appointment seed yet.
+prevention** (3.2, migration `feae714ecef5`), the **day-view calendar** (3.3), and the **week view
++ drag-drop reschedule** (3.4). **Next is step 3.5** — appointment status workflow (booked →
+arrived → done / cancelled / no-show). Still **six migrations** (head = `feae714ecef5`; 3.3 + 3.4
+were query/UI only). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients) —
+no appointment seed yet.
+
+**Calendar (3.3 + 3.4):** `/calendar` (`app/calendar/`) has a **Day | Week toggle**
+(`calendar-view.tsx`). Day view = read-only list (3.3). **Week view (3.4)** = a time grid (rows =
+30-min slots 09:00–17:30, cols = 7 days) with **drag-drop reschedule** via **`@dnd-kit/core`** (new
+approved dep): dragging a card PATCHes `start_time`; a same-dentist overlap comes back **409** and
+shows inline (card reverts). Fed by `GET /appointments?from=&to=` — the list endpoint now takes
+**either** `date=` (one day) **or** `from`/`to` (inclusive range); exactly one form, else 422.
+**Carried forward:** clinic hours + slot size are hardcoded in `lib/week.ts` (Phase 4 clinic
+settings); the UTC-day-bounds / browser-local-render timezone caveat still stands (Phase 4).
 
 **Day-view (3.3):** screen at `/calendar` (`app/calendar/`), fed by `GET /appointments?date=`,
 which now returns **`patient_name` + `dentist_name`** (resolved via a join in `list_appointments`
@@ -121,6 +131,69 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.4: week view + drag-drop reschedule
+
+**Status:** complete — small backend range widening + the week-view calendar with drag-drop,
+verified (58 tests pass; frontend lint+build+Docker build green with the new dep; range list +
+reschedule + 409 proven live against the compose Postgres; route/guard checked through Caddy). For
+commit. **First new frontend dependency since Phase 1.**
+
+### Scope decisions (confirmed with user)
+- **List endpoint gains a date-range mode.** `GET /appointments` now takes EITHER `date=` (one day,
+  unchanged) OR `from`/`to` (inclusive range) — exactly one form, else **422**. One request loads a
+  whole week.
+- **Full time-grid drag-drop** (user chose day+time-slot granularity over day-only): rows = 30-min
+  slots, cols = 7 days; a drop snaps to a (day, slot) cell and PATCHes `start_time`.
+- **Day | Week toggle** on `/calendar`; the 3.3 day view is unchanged.
+- **New dependency `@dnd-kit/core`** — user-approved. `core` alone (no `/sortable` or `/modifiers`).
+
+### Built — backend (query only, no migration)
+- `app/routers/appointments.py` `list_appointments` — accepts `date` OR `from`+`to` (aliased; `from`
+  is a Python keyword). Validation guard: neither, both, or a half-given range → 422
+  (`HTTP_422_UNPROCESSABLE_CONTENT`, the non-deprecated constant). Same patient/dentist-name join.
+- `tests/test_appointments.py` — `test_list_by_range` (spans days, excludes outside), boundaries
+  inclusive, and `test_list_requires_exactly_one_form` (neither/both/half → 422).
+
+### Built — frontend
+- **`@dnd-kit/core ^6.3.1`** installed (pulls `@dnd-kit/accessibility` + `/utilities`).
+- `lib/week.ts` — pure date/slot helpers: `startOfWeek` (Monday), `weekDays`, `addWeeks`,
+  `daySlots` (09:00–17:30 @ 30 min — **hardcoded**, Phase 4 clinic settings), `slotForStart`,
+  `slotDate`, `cellId`/`parseCellId`. Local-zone throughout (timezone caveat).
+- `lib/use-week-appointments.ts` — range fetch (`?from=&to=`) with `refetch()`, plus
+  `rescheduleAppointment(id, iso)` → `"ok" | "conflict" | {error}` (maps the PATCH 409).
+- `app/calendar/calendar-view.tsx` — Day|Week toggle wrapper; `page.tsx` renders it instead of
+  `<DayView/>` directly. Day view untouched.
+- `app/calendar/week-view.tsx` — the grid: `DndContext` + `PointerSensor` (5px activation so clicks
+  still work), draggable `ApptCard`s, droppable (day, slot) `Cell`s, `DragOverlay`. On drop:
+  compute new local `start_time`, PATCH; **409 → inline "slot taken" + card stays** (refetch on
+  success). Week nav (Prev/This week/Next). Patient profile links kept in a separate list below the
+  grid (keeps grid cards drag-focused, click-vs-drag clean).
+
+### Dependency added (asked user)
+`@dnd-kit/core ^6.3.1` (frontend). Recorded in `docs/TECH_STACK.md`.
+
+### Verified
+- **58 tests pass** in-container (55 prior + 3 range) against real Postgres.
+- Frontend `lint` + `build` green; **Docker frontend image rebuilds** (npm ci picks up the new dep,
+  TS compiles with dnd-kit types). `/calendar` still one route.
+- **Live against the compose Postgres** (the drag-drop's data path): range list returns the week's
+  appointments with names; **reschedule to a free slot → 200**; **reschedule onto a taken slot (same
+  dentist) → 409** "overlaps an existing appointment"; 422 guards (neither/both). Cleaned up.
+- **Through Caddy:** `/calendar` signed-out → **307 → /login**.
+- **Note:** the drag *gesture* itself (dnd-kit pointer interaction) is a browser action not driven
+  headlessly — but every API behaviour it relies on is proven, and the build type-checks the DnD
+  wiring. Handed to the user for a visual click-through.
+
+### Carried forward → 3.5
+- **Status workflow** (booked → arrived → done / cancelled / no-show) + colour-by-status on the
+  calendar. The `cancelled` status already frees a slot (3.2 constraint). Clinic hours/slot config +
+  the timezone fix remain Phase 4.
+
+### Suggested commit
+`feat: add week view and rescheduling`
 
 ---
 
