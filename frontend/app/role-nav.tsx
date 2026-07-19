@@ -8,7 +8,7 @@
 // button is not security). The pages themselves don't exist yet (Phase 2+);
 // these items demonstrate the gating.
 
-import { LayoutDashboard, Users, BarChart3, Shield } from "lucide-react";
+import { LayoutDashboard, Users, CalendarDays, BarChart3, Shield } from "lucide-react";
 import Link from "next/link";
 
 import { useCurrentStaff } from "@/lib/use-current-staff";
@@ -26,6 +26,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Patients", icon: Users, href: "/patients" },
+  { label: "Calendar", icon: CalendarDays, href: "/calendar" },
   { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
   { label: "Admin", icon: Shield, anyOf: ["admin"] },
 ];

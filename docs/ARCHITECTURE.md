@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 3.2 (Phase 3 in progress).** This describes what is built, not what
+**Honest to the code as of step 3.3 (Phase 3 in progress).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -239,8 +239,11 @@ The appointment endpoints (`app/routers/appointments.py`, schemas in
 `app/schemas/appointment.py`) follow the patient-router shape exactly — `get_current_staff` on
 every route, audited mutations, ids as path params (the day filter is a query *date*, not a
 patient identifier, so it's allowed). `POST` books (404 if the patient is unknown),
-`GET /{id}` reads, `GET ?date=YYYY-MM-DD` lists a day ordered by start time (the 3.3 day-view's
-data source), and `PATCH` reschedules.
+`GET /{id}` reads, `GET ?date=YYYY-MM-DD` lists a day ordered by start time (the day-view's data
+source), and `PATCH` reschedules. The day list returns a lighter `AppointmentListItem` that adds
+the resolved **`patient_name` and `dentist_name`** (via a join to `patient` and an outer-join to
+`staff_user` — the dentist is nullable), so the calendar can show who each appointment is for
+without an N+1 of per-row lookups (3.3).
 
 **Double-booking prevention lives in two layers, and the DB layer is the real one:**
 
@@ -280,6 +283,21 @@ one endpoint that returns `medical_notes`) and shows demographics in a `Card` pl
 non-empty (BUILD_PLAN §1: the one diabetic/blood-thinner patient is exactly where it matters).
 Read-only this step; list rows link into it. The id is a **path segment** (allowed — the
 no-id-in-URL rule is about query strings).
+
+### Day-view calendar (appointments — step 3.3)
+
+`/calendar` (`app/calendar/`) is the first appointment screen: a **read-only day view** with date
+navigation (Prev / Today / Next + a native `<input type="date">`). `lib/use-day-appointments.ts`
+(same authed browser→Caddy→`/api` fetch pattern, no debounce) calls `GET /appointments?date=` and
+renders a Tailwind table — time range (`HH:MM–HH:MM` from `start_time` + `duration_min`), patient
+(linking to `/patients/{id}`), dentist, a neutral status pill, and reason — with loading / error /
+empty states. A **Calendar** link was added to `app/role-nav.tsx` (any staff). No booking or status
+UI yet (later steps).
+
+**Timezone caveat:** the day list is bounded by **UTC** day edges and the browser renders times in
+its **local** zone. The clinic is IST with no clinic-timezone setting yet (Phase 4), so an IST
+evening appointment can technically fall on the next UTC day. Consistent with the app's
+UTC-everywhere handling; a proper fix waits for the Phase-4 clinic-timezone config.
 
 ### Seeding (`app/seed.py`)
 

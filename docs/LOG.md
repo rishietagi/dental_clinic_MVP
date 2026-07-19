@@ -15,11 +15,20 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1 + 3.2 done:**
-the `appointment` model + FKs (3.1, migration `56fda58b828c`), then the **booking API +
-double-booking prevention** (3.2, migration `feae714ecef5`). **Next is step 3.3** — day-view
-calendar (first appointment UI). Now **six migrations** (head = `feae714ecef5`). Two seed scripts:
-`app.seed` (admin) and `app.seed_patients` (dev patients) — no appointment seed yet.
+**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.3 done:**
+the `appointment` model + FKs (3.1, migration `56fda58b828c`), the **booking API + double-booking
+prevention** (3.2, migration `feae714ecef5`), and the **day-view calendar** (3.3, `/calendar` +
+day-list names, no migration). **Next is step 3.4** — week view + drag-drop reschedule. Still **six
+migrations** (head = `feae714ecef5`; 3.3 was query/UI only). Two seed scripts: `app.seed` (admin)
+and `app.seed_patients` (dev patients) — no appointment seed yet.
+
+**Day-view (3.3):** screen at `/calendar` (`app/calendar/`), fed by `GET /appointments?date=`,
+which now returns **`patient_name` + `dentist_name`** (resolved via a join in `list_appointments`
+→ new `AppointmentListItem` schema). Read-only + date nav (Prev/Today/Next + `<input type="date">`).
+**Known limitation:** the day query uses **UTC** day bounds and the frontend renders in the
+**browser's** zone; the clinic is IST with no clinic-timezone config yet (Phase 4). An IST evening
+slot could fall on the next UTC day. Consistent with the app's UTC-everywhere treatment; fix needs
+the Phase-4 clinic-timezone setting — **carried forward, do not build ahead.**
 
 **Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
 `dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` is a
@@ -112,6 +121,68 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.3: day-view calendar (first appointment UI)
+
+**Status:** complete — small backend widening + the first appointment screen, verified (55 tests
+pass; frontend lint+build green; day-list names proven live against the compose Postgres; route +
+guard checked through Caddy). For commit. **First appointment UI.**
+
+### Scope decisions (confirmed with user)
+- **Day-list response now carries names.** `GET /appointments?date=` returns `patient_name` +
+  `dentist_name` (a calendar must show *who*), resolved via a **join** in `list_appointments` — one
+  query, no N+1. New lighter `AppointmentListItem` schema; `AppointmentRead` (single-GET/POST/PATCH)
+  unchanged.
+- **Read-only day view + date navigation only.** No booking form, no status changes, no drag-drop
+  (those are later steps / a dedicated screen).
+
+### Built — backend (query only, no migration)
+- `app/schemas/appointment.py` — `AppointmentListItem` (adds `patient_name`, `dentist_name`;
+  `dentist_name` None when unassigned). `AppointmentListResponse.items` now points at it.
+- `app/routers/appointments.py` `list_appointments` — `select(Appointment, Patient.name,
+  StaffUser.name).join(Patient).outerjoin(StaffUser)` (dentist nullable → outerjoin), building each
+  item from the row tuple. Auth guard + day bounds unchanged.
+- `tests/test_appointments.py` — `test_list_items_carry_names`: assigned appt → `dentist_name` set;
+  unassigned → None; `patient_name` matches.
+
+### Built — frontend (first appointment screen)
+- `lib/use-day-appointments.ts` (`"use client"`) — authed fetch of `GET /appointments?date=`
+  (clones `use-patient-search`, no debounce; re-fetches on date change). States loading/ready/error.
+- `app/calendar/page.tsx` — server shell (back-link + `<DayView/>`), like `patients/page.tsx`.
+- `app/calendar/day-view.tsx` (`"use client"`) — date state (defaults today), **Prev/Today/Next** +
+  native `<input type="date">`, a Tailwind table (Time `HH:MM–HH:MM` from start+duration, Patient →
+  `/patients/{id}`, Dentist, a neutral Status pill, Reason). loading/error/**empty** states.
+- `app/role-nav.tsx` — added a **Calendar** nav link (`CalendarDays`, any staff). Second real
+  in-app link after Patients.
+
+### No new deps / migration / env / CI
+Native date input + existing shadcn `Button`; `lucide-react` already present. Schema unchanged (the
+change is query/response only), so no Alembic migration.
+
+### Verified
+- **55 tests pass** in-container (54 prior + 1 names test) against real Postgres.
+- Frontend `lint` + `build` green; `/calendar` is a registered route.
+- **Live against the compose Postgres:** seeded a patient + dentist + appointment, called the day
+  list through the real endpoint → `patient_name="Live Patient"`, `dentist_name="Dr Live"`,
+  correct time/duration/status; cleaned up. (Exercises the join end-to-end on the served DB.)
+- **Through Caddy:** `/calendar` signed-out → **307 → /login** (proxy guard); `/api/appointments`
+  no token → **401**. Backend startup clean.
+
+### Known limitation — carried forward (do NOT fix now)
+The day query uses **UTC** day bounds; the frontend renders in the **browser's** local zone. The
+clinic is IST (UTC+5:30) and there's no clinic-timezone config yet (Phase 4 clinic settings). So an
+IST evening appointment could land on the next UTC day. This is consistent with the app treating
+time as UTC everywhere; a proper fix needs the Phase-4 clinic-timezone setting. Don't build timezone
+config ahead of Phase 4.
+
+### Carried forward → 3.4
+- Week view + drag-drop reschedule (the `PATCH` reschedule API already exists from 3.2). Booking
+  form + status workflow still later (3.5 / dedicated screen). Clinic-timezone fix in Phase 4.
+
+### Suggested commit
+`feat: add day view calendar`
 
 ---
 

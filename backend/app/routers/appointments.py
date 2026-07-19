@@ -31,6 +31,7 @@ from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 from app.schemas.appointment import (
     AppointmentCreate,
+    AppointmentListItem,
     AppointmentListResponse,
     AppointmentRead,
     AppointmentUpdate,
@@ -122,17 +123,34 @@ def list_appointments(
     day_start = datetime.combine(date_, time.min, tzinfo=timezone.utc)
     day_end = datetime.combine(date_, time.max, tzinfo=timezone.utc)
 
-    rows = db.scalars(
-        select(Appointment)
+    # Join the patient (always present) and the dentist (nullable → outerjoin) so
+    # each row carries the names the calendar needs — one query, no N+1.
+    rows = db.execute(
+        select(Appointment, Patient.name, StaffUser.name)
+        .join(Patient, Appointment.patient_id == Patient.id)
+        .outerjoin(StaffUser, Appointment.dentist_id == StaffUser.id)
         .where(Appointment.start_time >= day_start)
         .where(Appointment.start_time <= day_end)
         .order_by(Appointment.start_time)
     ).all()
 
-    return AppointmentListResponse(
-        items=[AppointmentRead.model_validate(a) for a in rows],
-        total=len(rows),
-    )
+    items = [
+        AppointmentListItem(
+            id=appt.id,
+            patient_id=appt.patient_id,
+            patient_name=patient_name,
+            dentist_id=appt.dentist_id,
+            dentist_name=dentist_name,
+            treatment_id=appt.treatment_id,
+            start_time=appt.start_time,
+            duration_min=appt.duration_min,
+            status=appt.status,
+            reason=appt.reason,
+        )
+        for appt, patient_name, dentist_name in rows
+    ]
+
+    return AppointmentListResponse(items=items, total=len(items))
 
 
 @router.get("/{appointment_id}", response_model=AppointmentRead)

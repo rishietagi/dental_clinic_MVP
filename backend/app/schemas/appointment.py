@@ -58,8 +58,29 @@ class AppointmentRead(BaseModel):
     updated_at: datetime
 
 
+class AppointmentListItem(BaseModel):
+    """A row in the day/list view.
+
+    Like AppointmentRead but with the patient and dentist NAMES resolved (via a
+    join in the list endpoint), because a calendar has to show who each
+    appointment is for. `dentist_name` is None for an unassigned slot. Omits
+    created_at/updated_at — a list row doesn't need them.
+    """
+
+    id: UUID
+    patient_id: UUID
+    patient_name: str
+    dentist_id: UUID | None
+    dentist_name: str | None
+    treatment_id: UUID | None
+    start_time: datetime
+    duration_min: int
+    status: str
+    reason: str | None
+
+
 class AppointmentListResponse(BaseModel):
     """A day's appointments plus the total count."""
 
-    items: list[AppointmentRead]
+    items: list[AppointmentListItem]
     total: int

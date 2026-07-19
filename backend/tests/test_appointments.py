@@ -362,6 +362,43 @@ def test_list_by_day(as_staff):
     assert times == sorted(times)  # ordered by start_time
 
 
+def test_list_items_carry_names(as_staff):
+    """Day-list rows resolve patient_name (always) and dentist_name (or None)."""
+    client, _ = as_staff
+    did = _make_dentist()
+
+    # One assigned appointment and one unassigned, same patient, same day.
+    db = SessionLocal()
+    try:
+        dentist_name = db.get(StaffUser, did).name
+    finally:
+        db.close()
+
+    # Distinct patients so we can match names unambiguously.
+    db = SessionLocal()
+    try:
+        p_assigned = Patient(name="Assigned Patient")
+        p_walkin = Patient(name="Walk-in Patient")
+        db.add_all([p_assigned, p_walkin])
+        db.commit()
+        _patient_ids.extend([p_assigned.id, p_walkin.id])
+        pid_assigned, pid_walkin = p_assigned.id, p_walkin.id
+    finally:
+        db.close()
+
+    _book(
+        client, patient_id=str(pid_assigned), dentist_id=str(did),
+        start_time=_iso(BASE.replace(hour=9)), duration_min=30,
+    )
+    _book(client, patient_id=str(pid_walkin), start_time=_iso(BASE.replace(hour=11)))
+
+    items = client.get("/appointments", params={"date": "2030-08-02"}).json()["items"]
+    by_patient = {item["patient_name"]: item for item in items}
+
+    assert by_patient["Assigned Patient"]["dentist_name"] == dentist_name
+    assert by_patient["Walk-in Patient"]["dentist_name"] is None
+
+
 # --- reschedule --------------------------------------------------------------
 
 def test_reschedule(as_staff):
