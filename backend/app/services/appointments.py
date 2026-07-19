@@ -77,3 +77,41 @@ def find_conflicts(
         stmt = stmt.where(Appointment.id != exclude_id)
 
     return list(db.scalars(stmt).all())
+
+
+# --- status lifecycle (step 3.5) ---------------------------------------------
+#
+# The appointment status is a small state machine. New appointments start
+# `booked`; the front desk moves them through arrival and completion, with
+# cancel / no-show as off-ramps. Terminal states allow no further change.
+#
+#     booked ──▶ arrived ──▶ done
+#        └──────────┴──▶ cancelled
+#        └──────────┴──▶ no_show
+#
+# The DB overlap constraint frees a slot only for `cancelled` (3.2). `done` and
+# `no_show` are historical (the appointment is in the past), so they intentionally
+# do NOT free their slot — which is why no migration is needed here.
+#
+# `no_show` is stored with an underscore (safe in JSON/identifiers); the UI shows
+# it as "No-show".
+
+STATUSES: set[str] = {"booked", "arrived", "done", "cancelled", "no_show"}
+
+_ALLOWED: dict[str, set[str]] = {
+    "booked": {"arrived", "cancelled", "no_show"},
+    "arrived": {"done", "cancelled", "no_show"},
+    "done": set(),
+    "cancelled": set(),
+    "no_show": set(),
+}
+
+
+def can_transition(current: str, target: str) -> bool:
+    """True if moving from `current` to `target` status is allowed.
+
+    Same-state (current == target) is NOT a transition and returns False — the
+    caller surfaces that as a 409 ("already <status>"). An unknown status is
+    rejected earlier by schema validation, but is treated as not-allowed here too.
+    """
+    return target in _ALLOWED.get(current, set())

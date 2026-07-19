@@ -495,3 +495,109 @@ def test_reschedule_self_no_false_conflict(as_staff):
     # PATCH the same start_time (no real move) — must NOT conflict with itself.
     r = client.patch(f"/appointments/{a['id']}", json={"start_time": _iso(BASE)})
     assert r.status_code == 200, r.text
+
+
+# --- status workflow ---------------------------------------------------------
+
+def _status(client, appt_id, status):
+    return client.post(f"/appointments/{appt_id}/status", json={"status": status})
+
+
+def test_status_requires_auth():
+    assert client.post(
+        f"/appointments/{uuid.uuid4()}/status", json={"status": "arrived"}
+    ).status_code in (401, 403)
+
+
+def test_status_happy_path(as_staff):
+    """booked -> arrived -> done, each step 200, with audit rows."""
+    client, staff_id = as_staff
+    pid = _make_patient()
+    _, a = _book(client, patient_id=str(pid), start_time=_iso(BASE))
+    assert a["status"] == "booked"
+
+    r1 = _status(client, a["id"], "arrived")
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["status"] == "arrived"
+
+    r2 = _status(client, a["id"], "done")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "done"
+
+    # Both transitions audited (action="status").
+    actions = _audit_actions(staff_id, uuid.UUID(a["id"]))
+    assert "status" in actions
+
+
+def test_status_offramps(as_staff):
+    """booked -> cancelled, booked -> no_show, arrived -> no_show all legal."""
+    client, _ = as_staff
+    pid = _make_patient()
+
+    _, a1 = _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(hour=9)))
+    assert _status(client, a1["id"], "cancelled").status_code == 200
+
+    _, a2 = _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(hour=10)))
+    assert _status(client, a2["id"], "no_show").status_code == 200
+
+    _, a3 = _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(hour=11)))
+    assert _status(client, a3["id"], "arrived").status_code == 200
+    assert _status(client, a3["id"], "no_show").status_code == 200
+
+
+def test_illegal_transitions_conflict(as_staff):
+    """Terminal states and same->same are 409."""
+    client, _ = as_staff
+    pid = _make_patient()
+
+    _, a = _book(client, patient_id=str(pid), start_time=_iso(BASE))
+    # booked -> booked (no real change) -> 409
+    assert _status(client, a["id"], "booked").status_code == 409
+
+    # Drive to done, then done -> arrived -> 409 (terminal).
+    _status(client, a["id"], "arrived")
+    _status(client, a["id"], "done")
+    assert _status(client, a["id"], "arrived").status_code == 409
+
+    # A cancelled appointment is terminal too.
+    _, b = _book(client, patient_id=str(pid), start_time=_iso(BASE.replace(hour=13)))
+    _status(client, b["id"], "cancelled")
+    assert _status(client, b["id"], "booked").status_code == 409
+
+
+def test_unknown_status_422(as_staff):
+    client, _ = as_staff
+    pid = _make_patient()
+    _, a = _book(client, patient_id=str(pid), start_time=_iso(BASE))
+    assert _status(client, a["id"], "banana").status_code == 422
+
+
+def test_status_404_for_unknown_appointment(as_staff):
+    client, _ = as_staff
+    assert _status(client, str(uuid.uuid4()), "arrived").status_code == 404
+
+
+def test_cancelling_frees_the_slot(as_staff):
+    """Ties status to the booking rule: cancelling frees the slot for re-booking."""
+    client, _ = as_staff
+    pid = _make_patient()
+    did = _make_dentist()
+
+    _, a = _book(
+        client, patient_id=str(pid), dentist_id=str(did),
+        start_time=_iso(BASE), duration_min=30,
+    )
+    # Same slot is taken while booked.
+    s_conflict, _ = _book(
+        client, patient_id=str(pid), dentist_id=str(did),
+        start_time=_iso(BASE), duration_min=30,
+    )
+    assert s_conflict == 409
+
+    # Cancel it → the slot frees.
+    assert _status(client, a["id"], "cancelled").status_code == 200
+    s_ok, _ = _book(
+        client, patient_id=str(pid), dentist_id=str(did),
+        start_time=_iso(BASE), duration_min=30,
+    )
+    assert s_ok == 201

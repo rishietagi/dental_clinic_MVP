@@ -6,7 +6,7 @@
 // debounce (the input is a date, not free typing) — it re-fetches whenever the
 // `date` argument changes.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 
@@ -33,10 +33,13 @@ type State =
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
 // date is a YYYY-MM-DD string (what the API expects).
-export function useDayAppointments(date: string): State {
+export function useDayAppointments(date: string): State & { refetch: () => void } {
   const [state, setState] = useState<State>(
     apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
   );
+  // Bumping this re-runs the effect (a manual refetch — e.g. after a status change).
+  const [nonce, setNonce] = useState(0);
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     if (!apiUrl) return;
@@ -70,7 +73,7 @@ export function useDayAppointments(date: string): State {
     return () => {
       cancelled = true;
     };
-  }, [date]);
+  }, [date, nonce]);
 
-  return state;
+  return { ...state, refetch };
 }

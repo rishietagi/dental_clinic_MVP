@@ -10,9 +10,11 @@ this router calls find_conflicts() for a friendly 409, and the DB's
 between two PCs. A constraint violation that slips past the pre-check is
 translated to the same 409 rather than surfacing as a 500.
 
-No status transitions here — booked/arrived/done/cancelled/no-show is the 3.5
-workflow. Appointment ids travel as PATH params; the day filter is a query DATE
-(not a patient identifier), which the no-id-in-URL rule permits.
+Status transitions (booked → arrived → done, with cancel / no-show off-ramps) go
+through a dedicated `POST /{id}/status` endpoint that enforces the state machine
+(see app/services/appointments.py). The reschedule PATCH never touches status.
+Appointment ids travel as PATH params; the day filter is a query DATE (not a
+patient identifier), which the no-id-in-URL rule permits.
 """
 
 from datetime import date, datetime, time, timezone
@@ -34,9 +36,10 @@ from app.schemas.appointment import (
     AppointmentListItem,
     AppointmentListResponse,
     AppointmentRead,
+    AppointmentStatusUpdate,
     AppointmentUpdate,
 )
-from app.services.appointments import find_conflicts
+from app.services.appointments import can_transition, find_conflicts
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
@@ -226,5 +229,41 @@ def update_appointment(
         details=jsonable_encoder(changes),
     )
     _commit_or_conflict(db)
+    db.refresh(appt)
+    return appt
+
+
+@router.post("/{appointment_id}/status", response_model=AppointmentRead)
+def set_status(
+    appointment_id: UUID,
+    body: AppointmentStatusUpdate,
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> Appointment:
+    """Move an appointment to a new status, enforcing the state machine.
+
+    The status value itself is validated by the schema (unknown → 422). Here we
+    reject a *known but illegal* transition (e.g. done → arrived, or no change at
+    all) with a 409. Legal transitions are audited.
+    """
+    appt = _get_or_404(db, appointment_id)
+
+    if not can_transition(appt.status, body.status):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot change status from '{appt.status}' to '{body.status}'.",
+        )
+
+    old_status = appt.status
+    appt.status = body.status
+    record_audit(
+        db,
+        actor_id=staff.id,
+        action="status",
+        entity="appointment",
+        entity_id=appt.id,
+        details={"from": old_status, "to": body.status},
+    )
+    db.commit()
     db.refresh(appt)
     return appt

@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 3.4 (Phase 3 in progress).** This describes what is built, not what
+**Honest to the code as of step 3.5 (Phase 3 in progress).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -215,7 +215,7 @@ PK → roles).
 `/health`, `/me`, `/admin/ping`, the **patient CRUD** (`POST /patients`, `GET/PATCH
 /patients/{id}`, `POST /patients/{id}/archive|unarchive`), and the **appointment booking API**
 (`POST /appointments`, `GET /appointments/{id}`, `GET /appointments?date=`, `PATCH
-/appointments/{id}`).
+/appointments/{id}`, `POST /appointments/{id}/status`).
 
 ### First resource API (patients — step 2.2)
 
@@ -267,6 +267,28 @@ session TimeZone). So both the constraint and `find_conflicts` build the range i
 minute', '[)')`. `timezone('UTC', ts)` casts to a fixed-zone plain `timestamp` (immutable) and
 plain `timestamp + interval` is immutable. Two appointments overlap in real time iff their UTC
 representations overlap, so the rewrite is equivalent.
+
+### Appointment status workflow (step 3.5)
+
+An appointment's `status` is a small **state machine**, enforced in the API (the column stays plain
+text — no DB CHECK/enum). Legal transitions (in `app/services/appointments.py`, `can_transition`):
+
+```
+booked ──▶ arrived ──▶ done
+  └──────────┴──▶ cancelled
+  └──────────┴──▶ no_show
+```
+
+`done` / `cancelled` / `no_show` are terminal. Staff change status via **`POST
+/appointments/{id}/status`** `{status}` (any active staff, audited `action="status"` with
+`{from, to}`). The value is schema-validated (`Literal` of the five statuses → **422** for anything
+else); a *known but illegal* transition — including same→same — is a **409**. Only `cancelled` frees
+a slot for re-booking (the 3.2 constraint excludes it); `done`/`no_show` are historical, so they
+don't free their slot and no migration was needed. `no_show` is stored underscored, shown "No-show".
+
+The frontend mirrors the transition map + labels + colours in `lib/appointment-status.ts` (so the UI
+offers only legal buttons — the API is still the real guard). The **day view** shows coloured status
+pills plus per-appointment status buttons; the **week view** colours its cards by status.
 
 ### Frontend patient page + first navigation (2.3)
 

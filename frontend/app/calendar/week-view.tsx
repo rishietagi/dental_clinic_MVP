@@ -25,6 +25,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { statusLabel, statusStyle } from "@/lib/appointment-status";
 import type { AppointmentListItem } from "@/lib/use-day-appointments";
 import {
   useWeekAppointments,
@@ -58,12 +59,13 @@ function ApptCard({ appt }: { appt: AppointmentListItem }) {
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className={`cursor-grab rounded border bg-background p-1 text-xs leading-tight shadow-sm ${
-        isDragging ? "opacity-40" : ""
-      }`}
+      title={statusLabel(appt.status)}
+      className={`cursor-grab rounded border p-1 text-xs leading-tight shadow-sm ${statusStyle(
+        appt.status,
+      )} ${isDragging ? "opacity-40" : ""}`}
     >
       <div className="font-medium">{appt.patient_name}</div>
-      {appt.reason && <div className="truncate text-muted-foreground">{appt.reason}</div>}
+      {appt.reason && <div className="truncate opacity-80">{appt.reason}</div>}
     </div>
   );
 }
@@ -71,9 +73,11 @@ function ApptCard({ appt }: { appt: AppointmentListItem }) {
 // A non-interactive copy shown under the cursor while dragging.
 function ApptCardOverlay({ appt }: { appt: AppointmentListItem }) {
   return (
-    <div className="rounded border bg-background p-1 text-xs leading-tight shadow-md">
+    <div
+      className={`rounded border p-1 text-xs leading-tight shadow-md ${statusStyle(appt.status)}`}
+    >
       <div className="font-medium">{appt.patient_name}</div>
-      {appt.reason && <div className="truncate text-muted-foreground">{appt.reason}</div>}
+      {appt.reason && <div className="truncate opacity-80">{appt.reason}</div>}
     </div>
   );
 }

@@ -10,6 +10,13 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  changeStatus,
+  nextStatuses,
+  statusLabel,
+  statusStyle,
+  type Status,
+} from "@/lib/appointment-status";
 import { useDayAppointments, type AppointmentListItem } from "@/lib/use-day-appointments";
 
 // A date as YYYY-MM-DD in the *browser's* local zone (what the date input uses).
@@ -41,17 +48,63 @@ function timeRange(startIso: string, durationMin: number): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  // Neutral pill only — colour-by-status is step 3.5's concern.
   return (
-    <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-      {status}
+    <span className={`rounded px-1.5 py-0.5 text-xs ${statusStyle(status)}`}>
+      {statusLabel(status)}
     </span>
+  );
+}
+
+// The legal next-status buttons for one appointment. Terminal statuses render
+// nothing. A 409 (someone else already moved it) shows a note and refreshes.
+function StatusActions({
+  appt,
+  onChanged,
+  onNotice,
+}: {
+  appt: AppointmentListItem;
+  onChanged: () => void;
+  onNotice: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const options = nextStatuses(appt.status);
+  if (options.length === 0) return <span className="text-muted-foreground">—</span>;
+
+  async function apply(target: Status) {
+    setBusy(true);
+    const result = await changeStatus(appt.id, target);
+    setBusy(false);
+    if (result === "ok") {
+      onChanged();
+    } else if (result === "conflict") {
+      onNotice("That change was no longer valid — refreshed.");
+      onChanged();
+    } else {
+      onNotice(result.error);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {options.map((target) => (
+        <Button
+          key={target}
+          variant="outline"
+          size="xs"
+          disabled={busy}
+          onClick={() => apply(target)}
+        >
+          {statusLabel(target)}
+        </Button>
+      ))}
+    </div>
   );
 }
 
 export function DayView() {
   const [date, setDate] = useState<string>(todayIso());
   const state = useDayAppointments(date);
+  const [notice, setNotice] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -73,6 +126,8 @@ export function DayView() {
           className="ml-1 rounded-md border bg-background px-2 py-1 text-sm"
         />
       </div>
+
+      {notice && <p className="text-sm text-destructive">{notice}</p>}
 
       {state.kind === "loading" && (
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -105,6 +160,7 @@ export function DayView() {
                     <th className="px-3 py-2 font-medium">Dentist</th>
                     <th className="px-3 py-2 font-medium">Status</th>
                     <th className="px-3 py-2 font-medium">Reason</th>
+                    <th className="px-3 py-2 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -126,6 +182,13 @@ export function DayView() {
                         <StatusBadge status={a.status} />
                       </td>
                       <td className="px-3 py-2">{a.reason ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <StatusActions
+                          appt={a}
+                          onChanged={state.refetch}
+                          onNotice={setNotice}
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -7,6 +7,7 @@ edits here.
 """
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +40,17 @@ class AppointmentUpdate(BaseModel):
     dentist_id: UUID | None = None
     treatment_id: UUID | None = None
     reason: str | None = None
+
+
+class AppointmentStatusUpdate(BaseModel):
+    """Body for changing an appointment's status (POST /{id}/status).
+
+    The `Literal` restricts the value to the five known statuses — an unknown
+    status is a 422 here, distinct from the 409 the router raises for a *known but
+    illegal* transition (e.g. done -> arrived). `no_show` is stored underscored.
+    """
+
+    status: Literal["booked", "arrived", "done", "cancelled", "no_show"]
 
 
 class AppointmentRead(BaseModel):

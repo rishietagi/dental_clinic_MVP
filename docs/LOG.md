@@ -15,13 +15,24 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.4 done:**
+**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.5 done:**
 the `appointment` model + FKs (3.1, migration `56fda58b828c`), the **booking API + double-booking
-prevention** (3.2, migration `feae714ecef5`), the **day-view calendar** (3.3), and the **week view
-+ drag-drop reschedule** (3.4). **Next is step 3.5** — appointment status workflow (booked →
-arrived → done / cancelled / no-show). Still **six migrations** (head = `feae714ecef5`; 3.3 + 3.4
-were query/UI only). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients) —
-no appointment seed yet.
+prevention** (3.2, migration `feae714ecef5`), the **day-view calendar** (3.3), the **week view +
+drag-drop reschedule** (3.4), and the **status workflow** (3.5). **Next is step 3.6** — dashboard v1
+(today's schedule + arrivals). Still **six migrations** (head = `feae714ecef5`; 3.3–3.5 were
+query/UI/logic only — no schema change). Two seed scripts: `app.seed` (admin) and
+`app.seed_patients` (dev patients) — no appointment seed yet.
+
+**Status workflow (3.5):** appointment status is a state machine in the API (no DB CHECK/enum):
+`booked → arrived → done`, with `booked/arrived → cancelled | no_show`; `done`/`cancelled`/`no_show`
+terminal. Changed via **`POST /appointments/{id}/status`** (`get_current_staff`, audited
+`action="status"`). Unknown status → **422** (schema `Literal`); known-but-illegal transition
+(incl. same→same) → **409**. `no_show` is stored underscored, shown "No-show". **Only `cancelled`
+frees a slot** (the 3.2 constraint) — `done`/`no_show` are historical so they don't, which is why
+**no migration** was needed. State machine lives in `services/appointments.py` (`can_transition`);
+the frontend mirrors it in `lib/appointment-status.ts` (labels/colours/next-status + `changeStatus`).
+Day view has coloured pills **and** status buttons; week view **colours cards** only (grid is
+cramped — status controls live in the day view).
 
 **Calendar (3.3 + 3.4):** `/calendar` (`app/calendar/`) has a **Day | Week toggle**
 (`calendar-view.tsx`). Day view = read-only list (3.3). **Week view (3.4)** = a time grid (rows =
@@ -117,6 +128,7 @@ the original step instructions say otherwise:
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
 | **appointment.treatment_id has NO FK yet** | ERD shows `treatment_id FK` | `treatment` doesn't exist until Phase 4. `treatment_id` is a bare **nullable UUID column** now (so 3.2 can reference it and the shape matches the ERD); the actual FK constraint is added in **Phase 4 (4.2)** once `treatment` exists. A test asserts a random `treatment_id` inserts fine (proves the deferral). `patient_id`/`dentist_id` ARE real FKs. | `backend/app/models/appointment.py` |
+| **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
 | **Double-booking = GiST EXCLUDE constraint (first hand-written migration)** | — | `appointment_no_overlap` is a Postgres `EXCLUDE USING gist` constraint — the real double-booking guarantee (survives two racing PCs). **First hand-written migration** (autogenerate can't emit EXCLUDE / CREATE EXTENSION); needs the **`btree_gist`** extension. The range must use **immutable** arithmetic: `timestamptz + interval` is only STABLE and Postgres rejects it in a constraint, so we use `tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min*interval '1 min', '[)')`. The service `find_conflicts` pre-check uses the SAME expression (keep them in sync). Excludes `cancelled`; NULL dentist never clashes. | `backend/alembic/versions/feae714ecef5_*.py`, `backend/app/services/appointments.py` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
@@ -131,6 +143,60 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.5: appointment status workflow
+
+**Status:** complete — state machine + dedicated endpoint + colour-by-status + day-view controls,
+verified (65 tests pass; frontend lint+build green; state machine proven live against the compose
+Postgres). For commit. **No migration** — status is an existing free-text column.
+
+### Scope decisions (confirmed with user)
+- **Enforced state machine** (API-validated): `booked → arrived → done`; `booked/arrived →
+  cancelled | no_show`; `done`/`cancelled`/`no_show` terminal. Illegal transition (incl. same→same)
+  → **409**; unknown status → **422**.
+- **Dedicated `POST /{id}/status`** (mirrors patient archive/unarchive), any active staff, audited
+  (`action="status"`, details `{from, to}`). Reschedule PATCH still never touches status.
+- **UI: colour-by-status + controls.** Day view = coloured pills + legal-next-status buttons; week
+  view = coloured cards only (grid too cramped for buttons — controls live in the day view, the
+  front-desk's working screen).
+- **No migration:** only `cancelled` frees a slot (3.2 constraint); `done`/`no_show` are historical
+  and deliberately don't free slots.
+
+### Built — backend (no migration)
+- `app/services/appointments.py` — `STATUSES`, `_ALLOWED` transition map, `can_transition()`.
+- `app/schemas/appointment.py` — `AppointmentStatusUpdate` (`Literal` of the 5 statuses → 422 for
+  anything else).
+- `app/routers/appointments.py` — `POST /{id}/status`: 404 / 409 (illegal) / 200 + audit.
+- `tests/test_appointments.py` — +7: happy path booked→arrived→done (+audit), off-ramps
+  (cancelled/no_show from booked and arrived), illegal/terminal + same→same → 409, unknown → 422,
+  404, and **cancelling frees the slot** (ties status to the booking rule). 58 → **65**.
+
+### Built — frontend
+- `lib/appointment-status.ts` — `STATUS_LABELS`, `STATUS_STYLES` (blue/amber/green/muted-strike/red),
+  `NEXT_STATUSES` (mirrors the backend map), and `changeStatus()` (POST → "ok"|"conflict"|error).
+- `lib/use-day-appointments.ts` — added the `refetch()` nonce (so a status change refreshes).
+- `app/calendar/day-view.tsx` — coloured `StatusBadge`; new `StatusActions` (legal-next buttons per
+  row, terminal shows "—"; 409 → note + refetch); an Actions column + inline notice.
+- `app/calendar/week-view.tsx` — cards coloured by status (`statusStyle`), title = label.
+
+### No new deps / migration / env / CI
+
+### Verified
+- **65 tests pass** in-container against real Postgres. Frontend `lint` + `build` green.
+- **Live against the compose Postgres:** book→arrived→done (200s); done→arrived → **409** with a
+  clear message; unknown status → **422**; unknown appointment → **404**. Cleaned up.
+- **Through Caddy** (full stack up): `/calendar` guard 307→/login (checked earlier); stack left up
+  with seeded data for a user visual check of the coloured statuses + status buttons.
+
+### Carried forward → 3.6
+- **Dashboard v1**: today's schedule + arrivals — will lean on `GET /appointments?date=today` and
+  the `arrived` status. Visit recording (what "done" leads to) is Phase 4. Clinic hours/timezone
+  still Phase 4.
+
+### Suggested commit
+`feat: add appointment status workflow`
 
 ---
 
