@@ -1,24 +1,44 @@
 "use client";
 
-// Patient profile — Overview (demographics + medical-notes banner) plus, from
-// 4.4, a "Record visit" action and a read-only visit history.
+// Patient profile — Overview (demographics + medical-notes banner), a "Record
+// visit" action (4.4), a compact Treatments list with close/reopen (4.5), and a
+// read-only visit history.
 //
-// The history here is deliberately flat (one row per visit, newest first). The
-// richer Treatments tab — treatments expandable to their nested visits — is 4.7.
-// Demographics remain read-only; there's still no edit/archive UI.
+// The Treatments list here is deliberately compact — status + a Close/Reopen
+// button. The richer tab (each treatment expandable to its nested visits) is
+// 4.7. The visit history stays flat. Demographics remain read-only.
 
+import { useState } from "react";
 import Link from "next/link";
 
 import { MedicalNotesBanner } from "@/components/medical-notes-banner";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { usePatient } from "@/lib/use-patient";
+import {
+  closeTreatment,
+  reopenTreatment,
+  usePatientTreatments,
+  type Treatment,
+} from "@/lib/use-treatments";
+import type { MutationResult } from "@/lib/use-treatment-items";
 import { formatVisitDate, usePatientVisits, type Visit } from "@/lib/use-visits";
 
 export function PatientProfile({ patientId }: { patientId: string }) {
   const state = usePatient(patientId);
   const staffState = useCurrentStaff();
+
+  // Both live here so a lifecycle change (close/reopen) can refresh the visit
+  // history too — a closed treatment changes the status shown against its
+  // visits.
+  const treatments = usePatientTreatments(patientId);
+  const visits = usePatientVisits(patientId);
+
+  const canManage =
+    staffState.kind === "staff" &&
+    (staffState.staff.roles.includes("dentist") ||
+      staffState.staff.roles.includes("admin"));
 
   if (state.kind === "loading") {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -41,10 +61,6 @@ export function PatientProfile({ patientId }: { patientId: string }) {
   }
 
   const p = state.patient;
-  const canRecord =
-    staffState.kind === "staff" &&
-    (staffState.staff.roles.includes("dentist") ||
-      staffState.staff.roles.includes("admin"));
 
   return (
     <div className="flex flex-col gap-6">
@@ -76,7 +92,7 @@ export function PatientProfile({ patientId }: { patientId: string }) {
       {/* Dentist-only, and hidden for an archived patient — recording a visit
           against someone archived is almost certainly a mistake. The API is the
           real guard either way. */}
-      {canRecord && !p.archived && (
+      {canManage && !p.archived && (
         <div>
           {/* Styled as a button but rendered as a real link (this Button is
               Base UI, which has no `asChild`; buttonVariants gives the look
@@ -90,14 +106,137 @@ export function PatientProfile({ patientId }: { patientId: string }) {
         </div>
       )}
 
-      <VisitHistory patientId={patientId} />
+      <TreatmentsSection
+        state={treatments}
+        canManage={canManage}
+        onChanged={() => {
+          treatments.refetch();
+          visits.refetch();
+        }}
+      />
+
+      <VisitHistory state={visits} />
     </div>
   );
 }
 
-function VisitHistory({ patientId }: { patientId: string }) {
-  const state = usePatientVisits(patientId);
+// A compact treatments list with close/reopen. 4.7 turns this into the full
+// tab with visits nested under each treatment.
+function TreatmentsSection({
+  state,
+  canManage,
+  onChanged,
+}: {
+  state: ReturnType<typeof usePatientTreatments>;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Treatments</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {state.kind === "loading" && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {state.kind === "error" && (
+          <p className="text-sm text-destructive">
+            Couldn’t load treatments: {state.message}
+          </p>
+        )}
+        {state.kind === "ready" && state.data.total === 0 && (
+          <p className="text-sm text-muted-foreground">No treatments yet.</p>
+        )}
+        {state.kind === "ready" && state.data.total > 0 && (
+          <ul className="flex flex-col divide-y">
+            {state.data.items.map((t) => (
+              <TreatmentRow
+                key={t.id}
+                treatment={t}
+                canManage={canManage}
+                onChanged={onChanged}
+              />
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
+function TreatmentRow({
+  treatment,
+  canManage,
+  onChanged,
+}: {
+  treatment: Treatment;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const open = treatment.status === "in_progress";
+
+  async function act() {
+    setBusy(true);
+    setError(null);
+    const result: MutationResult = open
+      ? await closeTreatment(treatment.id)
+      : await reopenTreatment(treatment.id);
+    setBusy(false);
+
+    if (result === "ok") {
+      onChanged();
+      return;
+    }
+    if (result === "forbidden") {
+      setError("Only a dentist can change a treatment’s status.");
+      return;
+    }
+    if (result === "conflict") {
+      // Someone else changed it; refresh so the button reflects reality.
+      setError("This treatment’s status just changed. Refreshing…");
+      onChanged();
+      return;
+    }
+    setError(result.error);
+  }
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 first:pt-0 last:pb-0">
+      <span className="font-medium">{treatment.title}</span>
+      {treatment.tooth_ref && (
+        <span className="text-sm text-muted-foreground">
+          tooth {treatment.tooth_ref}
+        </span>
+      )}
+      <TreatmentStatus status={treatment.status} />
+      {canManage && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          disabled={busy}
+          onClick={act}
+        >
+          {busy ? "…" : open ? "Close" : "Reopen"}
+        </Button>
+      )}
+      {error && (
+        <p className="w-full text-xs text-destructive">{error}</p>
+      )}
+    </li>
+  );
+}
+
+function VisitHistory({
+  state,
+}: {
+  state: ReturnType<typeof usePatientVisits>;
+}) {
   return (
     <Card>
       <CardHeader>

@@ -25,9 +25,12 @@ view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 o
 `999215bea700`). **Step 4.3 is done:** the **visit recording API** (`POST /visits` auto-creates and
 auto-closes treatments; the project's **second role-split resource**). **Step 4.4 is done:** the
 **visit record screen** at `/patients/{id}/visits/new`, plus a read-only **`GET /treatments`** and
-visit history on the profile. **Next is step 4.5** — treatment lifecycle (close/reopen). Now **eight
-migrations** (head = `999215bea700`, unchanged since 4.2) and **eight models**. Two seed scripts:
-`app.seed` (admin) and `app.seed_patients` (dev patients).
+visit history on the profile. **Step 4.5 is done:** the **treatment lifecycle** —
+`POST /treatments/{id}/close` + `/reopen` (the treatments router's **first write routes**) and
+Close/Reopen controls in a compact Treatments section on the profile. **Next is step 4.6** — the
+inline follow-up scheduler from the visit screen. Now **eight migrations** (head = `999215bea700`,
+unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
+`app.seed_patients` (dev patients).
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -199,7 +202,7 @@ the original step instructions say otherwise:
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
 | **UI primitives are Base UI, NOT Radix/shadcn — there is no `asChild`** | shadcn/ui in the tech stack | `components/ui/button.tsx` wraps **`@base-ui/react/button`**. Base UI uses a **`render` prop**, not Radix's `asChild`, so `<Button asChild><Link/></Button>` silently fails to compose. For a link that looks like a button, apply **`buttonVariants()`** to the `Link`'s `className` (used on the profile's "Record visit"). Hit in 4.4. | `frontend/components/ui/button.tsx`, `frontend/app/patients/[id]/patient-profile.tsx` |
-| **`GET /treatments` is read-only until 4.5** | — | Added during a *frontend* step (4.4) because the visit form's picker needed the patient's open treatments. Deliberately **no POST/PATCH**: treatments are created by `POST /visits` (4.3) and their lifecycle is 4.5. `test_no_write_routes` pins it (405 on POST/PATCH) so a write route can't appear unnoticed. Ordering is **open-first, then newest** — the picker and 4.8's report both want actionable threads first. | `backend/app/routers/treatments.py` |
+| **`/treatments` writes = close/reopen ONLY** | — | The treatments router was read-only in 4.4; **4.5 added its first writes: `POST /{id}/close` + `/reopen`** (the `in_progress ⇄ completed` state machine in `services/treatments.py`, illegal transition → 409, audited). There is **still no create or replace** — treatments are born from `POST /visits`. `test_no_create_or_replace_routes` asserts bare `POST /treatments` + `PATCH /{id}` still 405, so a broad write route can't appear unnoticed. Ordering on the reads stays **open-first, then newest**. | `backend/app/routers/treatments.py`, `backend/app/services/treatments.py` |
 | **`POST /visits` auto-create/auto-close contract** | Roadmap says only "auto-creates treatment if new" | The request carries **exactly one** of `treatment_id` / `treatment` stub (else 422), plus `treatment_status`. `completed` sets `status` **and** `closed_at` in the same transaction — so a single-visit cleaning is one call that leaves nothing open (BUILD_PLAN §3). Auto-close is **explicit on the request**, never inferred from which procedures were performed. **4.4 (screen) and 4.6 (inline follow-up) both depend on this exact shape** — don't change it without updating them. | `backend/app/services/visits.py`, `backend/app/routers/visits.py` |
 | **Second role-split resource: visits are dentist-write** | Phases 2–3 let any active staff do everything | Visit writes are `require_role("dentist","admin")`; reads stay `get_current_staff`. BUILD_PLAN §2 gives "record visits/treatments" to the Dentist — clinical notes are the dentist's record — while the receptionist still needs visit history for billing (5.2) and follow-ups. A test asserts a receptionist gets **403** on POST/PATCH but **200** on GET. | `backend/app/routers/visits.py` |
 | **Services raise domain exceptions, not HTTPException** | — | `services/visits.py` raises `TreatmentNotFound` / `TreatmentPatientMismatch` / `TreatmentAlreadyClosed`; the router maps them to 404/409/409. Keeps the rule unit-testable without HTTP and leaves status codes in one place. Follow this for future service modules. | `backend/app/services/visits.py` |
@@ -222,6 +225,84 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.5: treatment lifecycle (close / reopen)
+
+**Status:** complete — a fourth service + two write routes + a compact profile UI, verified (121
+backend tests pass; lint + build + Docker image green; the lifecycle proven live end to end incl.
+closing the 4.4 gap; guards checked through Caddy). For commit. **No migration.** **The treatments
+router's first write routes.**
+
+### Scope decisions (confirmed with user)
+- **Two dedicated endpoints** — `POST /treatments/{id}/close` and `/reopen`, mirroring patient
+  archive/unarchive and appointment status (3.5). Not a `PATCH {status}`.
+- **`require_role("dentist", "admin")`** — closing a course of treatment is a clinical judgement,
+  same reasoning as visit-write (BUILD_PLAN §2). Reads stay any-active-staff.
+- **UI: a compact Treatments section on the profile** (status + Close/Reopen). 4.7 expands it into
+  the nested tab.
+- **Reopen always allowed from `completed`** — no "newer treatment exists" guard.
+
+### Built — backend (no migration)
+- `app/services/treatments.py` — **fourth `services/` module.** `close_treatment` /
+  `reopen_treatment` enforce `in_progress ⇄ completed` and keep `status`/`closed_at` consistent as a
+  pair (mirroring `visits._apply_status`). Raise **`IllegalTreatmentTransition`** (a domain
+  exception, not `HTTPException`) — the router owns status codes, per the 4.3 standing decision.
+- `app/routers/treatments.py` — added `POST /{id}/close` + `/reopen` (both
+  `require_role("dentist","admin")`) via a shared `_transition` helper: load-or-404, apply, map the
+  domain exception → 409, audit (`action="close"|"reopen"`, `details={from,to}`), single commit. The
+  reads are unchanged. Refactored the inline get-404 into a shared `_get_or_404`.
+- `tests/test_treatments.py` — +7: close→completed+`closed_at`+audit; reopen→in_progress+cleared;
+  **double-close 409**, **reopen-open 409**; 404s; audit `{from,to}`; and the **role split**
+  (receptionist 403 on both writes, 200 on reads). Renamed `test_no_write_routes` →
+  `test_no_create_or_replace_routes` (the /close,/reopen sub-paths ARE writes now; it still asserts
+  bare POST/PATCH 405). Fixture now also cleans lifecycle audit rows. 114 → **121**.
+
+### Built — frontend
+- `lib/use-treatments.ts` — `closeTreatment(id)` / `reopenTreatment(id)` posting to the endpoints,
+  returning the shared `MutationResult` (403 → "forbidden", 409 → "conflict" for a stale button).
+- `app/patients/[id]/patient-profile.tsx` — a compact **Treatments** section (via
+  `usePatientTreatments`, all statuses, open-first) above the visit history. Each row: title, tooth,
+  status pill (reused `TreatmentStatus`), and a **Close/Reopen** button for dentists/admins. Both the
+  treatments and visits hooks were **lifted into the parent** so a lifecycle change refetches *both*
+  (closing a treatment changes the status shown against its visits). A 409 shows a note and refetches.
+
+### Reused (no new versions)
+`visits._apply_status` discipline, the appointment `set_status` audited-transition shape,
+`require_role` + `record_audit`, `usePatientTreatments` + the `MutationResult` union +
+`TreatmentStatus`.
+
+### No new deps / migration / env / CI
+`status` + `closed_at` already exist (4.2) — behaviour on existing columns, like the 3.5 appointment
+status workflow needed no migration.
+
+### Verified
+- **121 backend tests pass** in-container against real Postgres.
+- Frontend **`lint` + `build` green**; Docker frontend image rebuilds.
+- **Live against the compose Postgres:** open a treatment → **close without a visit** (completed +
+  `closed_at`) → **close again 409** → **a visit against the closed treatment 409 (the 4.4 gap)** →
+  **reopen** (in_progress, `closed_at` cleared) → **reopen again 409** → **a visit against the
+  reopened treatment now succeeds** (gap closed end to end) → **receptionist 403 on close/reopen, 200
+  on reads** → audit shows `close`/`reopen` with `{from,to}`. Cleaned up.
+- **Through Caddy:** `POST /api/treatments/{id}/close` and `/reopen` no token → **401**.
+
+### What was NOT browser-clicked (honest note)
+Same caveat as 4.4: the live run drove the **real API over HTTP against the real database** and the
+guards were checked through Caddy, but the **profile's Close/Reopen buttons were not clicked in a
+browser** and auth was faked (the role split was still exercised via `require_role`). The build
+type-checks the wiring. **Handed to the user for a visual click-through.**
+
+### Carried forward → 4.6
+- **Inline follow-up scheduler from the visit screen** — book the next sitting from inside the visit
+  form (BUILD_PLAN §3: "in the same flow, not a separate trip to the calendar"), linking the new
+  appointment to the treatment via `appointment.treatment_id` (the FK added in 4.2).
+- Still open in Phase 4: **clinic settings** (hours + slot size) and the **clinic timezone**. Then
+  4.7 the nested Treatments tab (this step's compact list is its seed), 4.8 the open-treatments
+  dashboard.
+
+### Suggested commit
+`feat: add treatment lifecycle`
 
 ---
 

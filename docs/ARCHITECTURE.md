@@ -159,9 +159,9 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 4.3 there are eight models — `staff_user`, `audit_log`, `patient`, `appointment`,
-`treatment_item`, `treatment`, `visit`, `procedure_performed` — and three `app/services/` modules
-(`audit`, `appointments`, `visits`).
+As of 4.5 there are eight models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item`, `treatment`, `visit`, `procedure_performed` — and four `app/services/` modules
+(`audit`, `appointments`, `visits`, `treatments`).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -263,11 +263,17 @@ PK → roles).
 `GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`), and the
 **treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`).
 
-`app/routers/treatments.py` (4.4) is **read-only on purpose**: treatments are created by
-`POST /visits` and their lifecycle is 4.5, so there are no write routes and a test asserts POST/PATCH
-return 405. `patient_id` is required — an unfiltered list of every treatment in the clinic isn't a
-screen anyone has — and results are ordered **open-first, then newest**, because every caller (the
-visit form's picker, 4.8's report) is looking for actionable work.
+`app/routers/treatments.py` reads (4.4) require `patient_id` — an unfiltered list of every treatment
+in the clinic isn't a screen anyone has — and are ordered **open-first, then newest**, because every
+caller (the visit form's picker, 4.8's report) is looking for actionable work. **4.5 added the
+router's first writes**: `POST /{id}/close` and `POST /{id}/reopen`, both
+`require_role("dentist","admin")`. They drive the tiny `in_progress ⇄ completed` state machine in
+`app/services/treatments.py` (the fourth service module), which raises `IllegalTreatmentTransition`
+(mapped to 409) and keeps `status`/`closed_at` consistent — the same discipline as
+`visits._apply_status`. Each transition is audited. There is **still no create/replace route**:
+treatments are born from `POST /visits`, and a test pins that bare POST/PATCH on the collection
+return 405. Close lets the dentist finish a course without recording a visit; reopen is the remedy
+for the 409 the visit form hits against a completed treatment.
 
 ### Visit recording + the auto-create rule (step 4.3)
 
@@ -416,8 +422,14 @@ already completed") to distinct inline messages, because both are outcomes a rea
 
 The profile also gained a flat **visit history** (date, treatment, status, notes, procedure names).
 The status shown belongs to the *treatment*, so every sitting on a finished thread reads "completed" —
-correct, since it describes the thread's current state rather than that day's work. The richer
-Treatments tab with visits nested under each treatment is **4.7**.
+correct, since it describes the thread's current state rather than that day's work.
+
+**4.5** added a compact **Treatments** section to the profile (above the history): each treatment's
+title, tooth, status, and — for dentists/admins — a **Close** or **Reopen** button calling the
+lifecycle endpoints. The treatments and visits hooks are lifted into the profile component so a
+lifecycle change refetches both (closing a treatment changes the status shown against its visits).
+The richer Treatments tab with visits nested under each treatment is still **4.7**; this compact
+list is its seed.
 
 ### Treatment catalogue + the first role split (step 4.1)
 

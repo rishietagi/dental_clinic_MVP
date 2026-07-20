@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import type { MutationResult } from "@/lib/use-treatment-items";
 
 export type Treatment = {
   id: string;
@@ -85,4 +86,48 @@ export function usePatientTreatments(
   }, [patientId, openOnly, nonce]);
 
   return { ...state, refetch };
+}
+
+// --- lifecycle (step 4.5): close / reopen -----------------------------------
+//
+// Writes are dentist/admin on the API, so the result distinguishes:
+//   403 -> "forbidden": not a dentist
+//   409 -> "conflict":  the treatment is already in the target state (e.g. a
+//                       stale button after someone else changed it)
+// The caller shows each distinctly and refetches on conflict.
+
+async function transition(
+  treatmentId: string,
+  action: "close" | "reopen",
+): Promise<MutationResult> {
+  if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
+  try {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return { error: "Not signed in." };
+
+    const res = await fetch(`${apiUrl}/treatments/${treatmentId}/${action}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+
+    if (res.ok) return "ok";
+    if (res.status === 403) return "forbidden";
+    if (res.status === 409) return "conflict";
+    return { error: `Request failed (${res.status}).` };
+  } catch (error: unknown) {
+    return {
+      error: error instanceof Error ? error.message : `Could not ${action} the treatment.`,
+    };
+  }
+}
+
+export function closeTreatment(id: string): Promise<MutationResult> {
+  return transition(id, "close");
+}
+
+export function reopenTreatment(id: string): Promise<MutationResult> {
+  return transition(id, "reopen");
 }

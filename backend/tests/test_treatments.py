@@ -23,6 +23,7 @@ from app.auth import get_current_claims
 from app.config import settings
 from app.db import SessionLocal
 from app.main import app
+from app.models.audit_log import AuditLog
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 from app.models.treatment import Treatment
@@ -79,6 +80,12 @@ def ctx(db_available):
     finally:
         app.dependency_overrides.clear()
         db.rollback()
+        # Lifecycle tests (4.5) write audit rows keyed to the acting dentist.
+        for row in list(
+            db.scalars(select(AuditLog).where(AuditLog.actor_id == staff.id))
+        ):
+            db.delete(row)
+            db.commit()
         for pid in (patient.id, other.id):
             for t in list(
                 db.scalars(select(Treatment).where(Treatment.patient_id == pid))
@@ -196,11 +203,106 @@ def test_empty_list_for_a_patient_with_no_treatments(ctx):
     assert resp.json() == {"items": [], "total": 0}
 
 
-def test_no_write_routes(ctx):
-    """Treatments are created by POST /visits; lifecycle is 4.5.
+def test_no_create_or_replace_routes(ctx):
+    """Treatments are born from POST /visits; the only writes are close/reopen.
 
-    Pins the read-only scope so a write route can't appear here unnoticed.
+    Pins that there's still no create/replace route on the collection — so one
+    can't appear unnoticed. (The /close and /reopen sub-paths ARE writes, tested
+    below.)
     """
     t = _make(ctx, "Read only")
     assert ctx.client.post("/treatments", json={"title": "x"}).status_code == 405
     assert ctx.client.patch(f"/treatments/{t.id}", json={"title": "x"}).status_code == 405
+
+
+# --- lifecycle: close / reopen (step 4.5) ------------------------------------
+
+def test_close_an_open_treatment(ctx):
+    t = _make(ctx, "RCT tooth 36")
+    assert t.status == "in_progress" and t.closed_at is None
+
+    resp = ctx.client.post(f"/treatments/{t.id}/close")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "completed"
+    assert body["closed_at"] is not None
+
+    ctx.db.expire_all()
+    row = ctx.db.get(Treatment, t.id)
+    assert row.status == "completed" and row.closed_at is not None
+
+
+def test_reopen_a_completed_treatment(ctx):
+    t = _make(ctx, "Old RCT", status="completed", days_ago=5)
+    assert t.closed_at is not None
+
+    resp = ctx.client.post(f"/treatments/{t.id}/reopen")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "in_progress"
+    assert body["closed_at"] is None
+
+    ctx.db.expire_all()
+    row = ctx.db.get(Treatment, t.id)
+    assert row.status == "in_progress" and row.closed_at is None
+
+
+def test_double_close_is_409(ctx):
+    t = _make(ctx, "Cleaning", status="completed")
+    assert ctx.client.post(f"/treatments/{t.id}/close").status_code == 409
+
+
+def test_reopen_an_open_treatment_is_409(ctx):
+    t = _make(ctx, "Still going")
+    assert ctx.client.post(f"/treatments/{t.id}/reopen").status_code == 409
+
+
+def test_lifecycle_404s(ctx):
+    missing = uuid.uuid4()
+    assert ctx.client.post(f"/treatments/{missing}/close").status_code == 404
+    assert ctx.client.post(f"/treatments/{missing}/reopen").status_code == 404
+
+
+def test_close_reopen_are_audited(ctx):
+    t = _make(ctx, "Audit me")
+    ctx.client.post(f"/treatments/{t.id}/close")
+    ctx.client.post(f"/treatments/{t.id}/reopen")
+
+    rows = list(
+        ctx.db.scalars(
+            select(AuditLog)
+            .where(AuditLog.entity == "treatment")
+            .where(AuditLog.entity_id == t.id)
+        )
+    )
+    actions = {r.action for r in rows}
+    assert {"close", "reopen"} <= actions
+    close_row = next(r for r in rows if r.action == "close")
+    assert close_row.details == {"from": "in_progress", "to": "completed"}
+
+
+def test_receptionist_cannot_change_lifecycle(ctx):
+    """Reads yes, close/reopen no — enforced on the API, not just hidden in UI."""
+    t = _make(ctx, "Front-desk attempt")
+
+    # Swap the acting staff to a receptionist for this test.
+    recep = StaffUser(
+        id=uuid.uuid4(),
+        name="Test Receptionist",
+        email=f"{uuid.uuid4()}@clinic.local",
+        roles=["receptionist"],
+        active=True,
+    )
+    ctx.db.add(recep)
+    ctx.db.commit()
+    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(recep.id)}
+    try:
+        assert ctx.client.get(f"/treatments?patient_id={ctx.patient.id}").status_code == 200
+        assert ctx.client.get(f"/treatments/{t.id}").status_code == 200
+        assert ctx.client.post(f"/treatments/{t.id}/close").status_code == 403
+        assert ctx.client.post(f"/treatments/{t.id}/reopen").status_code == 403
+    finally:
+        # Restore the dentist so the fixture's cleanup (keyed to it) still runs.
+        app.dependency_overrides[get_current_claims] = lambda: {"sub": str(ctx.staff.id)}
+        ctx.db.delete(ctx.db.get(StaffUser, recep.id))
+        ctx.db.commit()
