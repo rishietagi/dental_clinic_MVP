@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 3.5 (Phase 3 in progress).** This describes what is built, not what
+**Honest to the code as of step 3.6 (Phase 3 complete).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -306,6 +306,23 @@ one endpoint that returns `medical_notes`) and shows demographics in a `Card` pl
 non-empty (BUILD_PLAN §1: the one diabetic/blood-thinner patient is exactly where it matters).
 Read-only this step; list rows link into it. The id is a **path segment** (allowed — the
 no-id-in-URL rule is about query strings).
+
+### Dashboard — the home screen (step 3.6)
+
+`/` (`app/page.tsx` + `app/today-dashboard.tsx`) is the **dashboard**, the screen staff land on
+after signing in. `page.tsx` stays an async server component (it reads the user for the
+email/sign-out header); the schedule itself is a client component.
+
+It shows **today's schedule** (time range, patient → profile, dentist, coloured status, reason) and
+an **arrivals summary** — count tiles for total and each status, using the same `statusStyle`
+palette so summary and table agree. Both come from a single `GET /appointments?date=<today>` via the
+existing `useDayAppointments` hook; the counts are derived client-side, so there is **no dashboard
+API** and no extra request. It is always *today* — the calendar is where other days are browsed, and
+where status changes and rescheduling happen (the dashboard deliberately has no status controls, so
+one screen owns them). RoleNav's "Dashboard" links here.
+
+Today's collections (Phase 5.5) and open-treatments-without-a-follow-up (Phase 4.8) are the
+dashboard's remaining BUILD_PLAN cards — not built yet, and not stubbed.
 
 ### Calendar — day + week views (appointments — steps 3.3, 3.4)
 

@@ -24,7 +24,7 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Patients", icon: Users, href: "/patients" },
   { label: "Calendar", icon: CalendarDays, href: "/calendar" },
   { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"] },

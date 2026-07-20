@@ -15,13 +15,21 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 IN PROGRESS.** Phase 2 complete (2.1–2.5). **Steps 3.1–3.5 done:**
-the `appointment` model + FKs (3.1, migration `56fda58b828c`), the **booking API + double-booking
-prevention** (3.2, migration `feae714ecef5`), the **day-view calendar** (3.3), the **week view +
-drag-drop reschedule** (3.4), and the **status workflow** (3.5). **Next is step 3.6** — dashboard v1
-(today's schedule + arrivals). Still **six migrations** (head = `feae714ecef5`; 3.3–3.5 were
-query/UI/logic only — no schema change). Two seed scripts: `app.seed` (admin) and
+**Where we are:** **PHASE 3 IS COMPLETE** (3.1–3.6 done). Phase 2 complete too (2.1–2.5). The
+appointment stack: model + FKs (3.1, migration `56fda58b828c`), **booking API + double-booking
+prevention** (3.2, migration `feae714ecef5`), **day-view calendar** (3.3), **week view + drag-drop
+reschedule** (3.4), **status workflow** (3.5), and **dashboard v1 on `/`** (3.6). **Next is Phase 4
+— Treatments, visits & follow-ups (the clinical core)**, starting with **step 4.1**
+(`treatment_item` list + Settings CRUD). Still **six migrations** (head = `feae714ecef5`; 3.3–3.6
+were query/UI/logic only — no schema change). Two seed scripts: `app.seed` (admin) and
 `app.seed_patients` (dev patients) — no appointment seed yet.
+
+**Dashboard (3.6):** `/` **is** the dashboard (was a landing page). Shows an **arrivals summary**
+(count tiles: total + one per status, same colours) and **today's schedule** table, both derived
+from `GET /appointments?date=<today>` via the existing `useDayAppointments` hook — **no new API**.
+Always today (no date nav — the calendar browses other days). **No status controls here** — those
+live in the day view so one place owns them. The dev `HealthCard` was kept, moved to the bottom.
+RoleNav's "Dashboard" now links to `/`.
 
 **Status workflow (3.5):** appointment status is a state machine in the API (no DB CHECK/enum):
 `booked → arrived → done`, with `booked/arrived → cancelled | no_show`; `done`/`cancelled`/`no_show`
@@ -143,6 +151,63 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-19 — Step 3.6: dashboard v1 — today's schedule + arrivals (PHASE 3 COMPLETE)
+
+**Status:** complete — pure frontend, verified (65 backend tests still pass; lint+build+Docker build
+green; `/` guard + today's data confirmed live). For commit. **This finishes Phase 3.**
+
+### Scope decisions (confirmed with user)
+- **`/` becomes the dashboard** (it was a leftover landing page). Signing in lands on today's
+  schedule; RoleNav's "Dashboard" placeholder now links to `/`.
+- **Content = today's schedule + arrivals summary** — a table of today's appointments plus count
+  tiles per status. "Arrivals" is meaningful now that 3.5 made `arrived` real.
+- **HealthCard kept** (user's call) but moved to the **bottom**, de-emphasised, so clinical content
+  leads.
+- **No status controls on the dashboard** — the day view owns them (one place, no duplication). The
+  dashboard links to the calendar instead.
+
+### Built (all frontend — no backend change, no migration, no new deps)
+- `app/today-dashboard.tsx` (`"use client"`) — arrivals summary (total + a tile per status, using
+  `statusStyle` so summary and table agree) and today's schedule table (time range, patient →
+  `/patients/{id}`, dentist, coloured status, reason). loading / error / **empty** states, plus a
+  "View calendar →" link. Counts derived client-side from the same list — no extra request.
+- `app/page.tsx` — now the dashboard shell: still an async server component (reads the user for the
+  email/sign-out header), widened to the `max-w-3xl` pattern used by `/patients` and `/calendar`,
+  renders a date heading, `RoleNav`, `TodayDashboard`, then `HealthCard` last.
+- `app/role-nav.tsx` — Dashboard item gets `href: "/"`.
+
+### Reused (deliberately wrote no new versions)
+`lib/use-day-appointments.ts` (hook + `refetch`), `lib/appointment-status.ts`
+(`statusLabel`/`statusStyle`/`STATUSES`), `lib/week.ts` (`todayIso`).
+
+### Verified
+- Frontend `lint` + `build` green; `/` stays dynamic (`ƒ`) since it reads the session server-side.
+  Docker frontend image rebuilds clean.
+- **Backend untouched — 65 tests still pass** (regression check).
+- **Through Caddy:** `/` signed-out → **307 → /login**. Today's data present (4 appointments, one
+  each `booked` / `arrived` / `cancelled` / `no_show`) so the summary + colours are exercised.
+- Stack left up for the user's visual check.
+
+### Timezone (unchanged, still carried forward)
+"Today" is the browser's local date; the API bounds the day in UTC. Same caveat as 3.3/3.4 — the
+fix needs the Phase-4 clinic-timezone setting. The page heading's date is server-rendered (a label
+only); the schedule uses the shared `todayIso()`.
+
+### PHASE 3 COMPLETE
+Appointments: model, booking API with DB-enforced double-booking prevention, day + week calendars
+with drag-drop rescheduling, the status lifecycle, and a dashboard. The front-desk loop works.
+
+### Carried forward → Phase 4 (4.1)
+`treatment_item` list + Settings CRUD, then the clinical core (treatments, visits, inline
+follow-ups). Also still open for Phase 4: **clinic settings** (hours, slot size — currently
+hardcoded in `lib/week.ts`) and the **clinic timezone**. And `appointment.treatment_id` gets its
+**real FK** in 4.2.
+
+### Suggested commit
+`feat: add dashboard`
 
 ---
 
