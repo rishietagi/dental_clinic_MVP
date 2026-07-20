@@ -16,18 +16,27 @@ The tiny state machine (`in_progress <-> completed`) lives in
 appointment status workflow (3.5). Each transition is audited.
 """
 
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_staff, require_role
 from app.db import get_db
+from app.models.appointment import Appointment
+from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 from app.models.treatment import Treatment
-from app.schemas.treatment import TreatmentListResponse, TreatmentRead
+from app.models.visit import Visit
+from app.schemas.treatment import (
+    NeedsFollowUpResponse,
+    TreatmentListResponse,
+    TreatmentNeedsFollowUp,
+    TreatmentRead,
+)
 from app.services.audit import record_audit
 from app.services.treatments import (
     IllegalTreatmentTransition,
@@ -84,6 +93,75 @@ def list_treatments(
         items=[TreatmentRead.model_validate(t) for t in rows],
         total=total,
     )
+
+
+@router.get("/needs-follow-up", response_model=NeedsFollowUpResponse)
+def needs_follow_up(
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> NeedsFollowUpResponse:
+    """Open treatments with no upcoming appointment — the walk-out-the-door report.
+
+    BUILD_PLAN §3 calls this the single most valuable report in the app: a patient
+    mid-course whom nobody has booked back in. A treatment is flagged when it is
+    `in_progress` AND has no **future, non-cancelled** appointment linked to it
+    (via `appointment.treatment_id`, populated by the inline follow-up in 4.6).
+
+    - A *past* appointment doesn't cover it — that sitting already happened, the
+      next one still needs booking. (This is why "zero appointments" would be
+      wrong.)
+    - A *cancelled* future appointment doesn't cover it either — same exclusion
+      the booking rules use (`status != 'cancelled'`).
+    - Any dentist's future appointment counts (the clinic effectively has one).
+
+    "Future" is measured in **UTC** (`now()` here), consistent with the app's
+    UTC-everywhere time handling — the clinic-timezone caveat from 3.3 applies.
+    Ordered so the longest-unseen (or never-recorded) treatments surface first,
+    since those are the most at risk of being forgotten.
+
+    Note this literal route is declared BEFORE `GET /{treatment_id}`; otherwise
+    FastAPI would try to parse "needs-follow-up" as a UUID and 422.
+    """
+    now = datetime.now(timezone.utc)
+
+    # A future, non-cancelled appointment on this treatment "covers" it.
+    covered = exists().where(
+        Appointment.treatment_id == Treatment.id,
+        Appointment.status != "cancelled",
+        Appointment.start_time > now,
+    )
+
+    # Latest visit date for the treatment (None when it has no visits yet).
+    last_visit = (
+        select(func.max(Visit.visit_date))
+        .where(Visit.treatment_id == Treatment.id)
+        .scalar_subquery()
+    )
+
+    stmt = (
+        select(Treatment, Patient.name, last_visit.label("last_visit_date"))
+        .join(Patient, Treatment.patient_id == Patient.id)
+        .where(Treatment.status == "in_progress")
+        .where(~covered)
+        # Longest-unseen first: NULLs (never recorded) at the top, then oldest
+        # last visit. started_at breaks ties deterministically.
+        .order_by(last_visit.is_(None).desc(), last_visit.asc(), Treatment.started_at.asc())
+    )
+
+    rows = db.execute(stmt).all()
+    items = [
+        TreatmentNeedsFollowUp(
+            id=t.id,
+            patient_id=t.patient_id,
+            patient_name=patient_name,
+            title=t.title,
+            tooth_ref=t.tooth_ref,
+            started_at=t.started_at,
+            last_visit_date=last_visit_date,
+        )
+        for t, patient_name, last_visit_date in rows
+    ]
+    return NeedsFollowUpResponse(items=items, total=len(items))
 
 
 @router.get("/{treatment_id}", response_model=TreatmentRead)

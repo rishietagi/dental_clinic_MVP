@@ -131,3 +131,72 @@ export function closeTreatment(id: string): Promise<MutationResult> {
 export function reopenTreatment(id: string): Promise<MutationResult> {
   return transition(id, "reopen");
 }
+
+// --- needs-follow-up report (step 4.8) --------------------------------------
+//
+// Clinic-wide: open treatments with no upcoming appointment — "revenue walking
+// out the door" (BUILD_PLAN §3). Feeds the dashboard section. Same fetch shape
+// as usePatientTreatments, but no patient arg.
+
+export type TreatmentNeedsFollowUp = {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  title: string;
+  tooth_ref: string | null;
+  started_at: string;
+  last_visit_date: string | null;
+};
+
+type NeedsFollowUpResult = { items: TreatmentNeedsFollowUp[]; total: number };
+
+type NeedsFollowUpState =
+  | { kind: "loading" }
+  | { kind: "ready"; data: NeedsFollowUpResult }
+  | { kind: "error"; message: string };
+
+export function useNeedsFollowUp(): NeedsFollowUpState & { refetch: () => void } {
+  const [state, setState] = useState<NeedsFollowUpState>(
+    apiUrl
+      ? { kind: "loading" }
+      : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
+  );
+  const [nonce, setNonce] = useState(0);
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      if (!cancelled) setState({ kind: "loading" });
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not signed in.");
+
+        const res = await fetch(`${apiUrl}/treatments/needs-follow-up`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+
+        const data = (await res.json()) as NeedsFollowUpResult;
+        if (!cancelled) setState({ kind: "ready", data });
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message =
+            error instanceof Error ? error.message : "Could not load the report.";
+          setState({ kind: "error", message });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce]);
+
+  return { ...state, refetch };
+}

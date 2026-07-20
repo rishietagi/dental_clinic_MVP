@@ -1,4 +1,5 @@
 import { HealthCard } from "./health-card";
+import { NeedsFollowUp } from "./needs-follow-up";
 import { RoleNav } from "./role-nav";
 import { SignOutButton } from "./sign-out-button";
 import { TodayDashboard } from "./today-dashboard";
@@ -36,6 +37,9 @@ export default async function Home() {
       </div>
 
       <RoleNav />
+
+      {/* Highest-value first: who's mid-treatment with no next appointment. */}
+      <NeedsFollowUp />
 
       <TodayDashboard />
 

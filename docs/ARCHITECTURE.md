@@ -275,6 +275,16 @@ treatments are born from `POST /visits`, and a test pins that bare POST/PATCH on
 return 405. Close lets the dentist finish a course without recording a visit; reopen is the remedy
 for the 409 the visit form hits against a completed treatment.
 
+**4.8** added the router's headline read: `GET /treatments/needs-follow-up`, the **open treatments
+with no next appointment** report (BUILD_PLAN §3's most valuable one). It's clinic-wide (any active
+staff) and returns each flagged treatment with its patient name and last-visit date. A treatment is
+flagged when it's `in_progress` **and** has no appointment linked (by `treatment_id`) that is both
+**upcoming and non-cancelled** — a past sitting or a cancelled booking doesn't count, which is the
+whole point (those are the walk-out cases). The query is a `~exists()` correlated subquery over
+`appointment` plus a `max(visit.visit_date)` scalar subquery, with "now" measured in UTC (the
+clinic-timezone caveat applies). **Route order matters:** this literal path is declared before
+`GET /{treatment_id}`, or FastAPI would parse "needs-follow-up" as a UUID and 422.
+
 ### Visit recording + the auto-create rule (step 4.3)
 
 `app/routers/visits.py` is where the app starts holding real clinical content, and it's the
@@ -480,8 +490,14 @@ API** and no extra request. It is always *today* — the calendar is where other
 where status changes and rescheduling happen (the dashboard deliberately has no status controls, so
 one screen owns them). RoleNav's "Dashboard" links here.
 
-Today's collections (Phase 5.5) and open-treatments-without-a-follow-up (Phase 4.8) are the
-dashboard's remaining BUILD_PLAN cards — not built yet, and not stubbed.
+**4.8** added the **Treatments needing a follow-up** section (`app/needs-follow-up.tsx`), rendered at
+the **top** of `/` — above today's schedule, because an open treatment with no next appointment is
+the highest-value thing to see (BUILD_PLAN §3). It reads `GET /treatments/needs-follow-up` via
+`useNeedsFollowUp` and lists each flagged treatment's patient (linked to the profile), title, and
+last-seen date; the empty state ("All open treatments have a follow-up booked") is phrased as
+reassurance. It's a separate component from `today-dashboard.tsx` — the two are independent, so the
+clinic-wide report and the today-schedule hook don't entangle. Today's collections (Phase 5.5) is the
+dashboard's remaining BUILD_PLAN card.
 
 ### Calendar — day + week views (appointments — steps 3.3, 3.4)
 

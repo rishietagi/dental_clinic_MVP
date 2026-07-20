@@ -32,10 +32,17 @@ Close/Reopen controls in a compact Treatments section on the profile. **Step 4.6
 linked to the treatment (`appointment.treatment_id`, first use of that FK from the UI, and the
 **first booking-from-UI path** at all). **Step 4.7 is done:** the patient profile now shows
 **treatments each expandable to their nested visits** (merged from the old flat Treatments list +
-separate visit-history card; grouped **client-side**, no new endpoint). **Next is step 4.8** — the
-dashboard flag for open treatments with no next appointment. Now **eight migrations** (head =
-`999215bea700`, unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
-`app.seed_patients` (dev patients).
+separate visit-history card; grouped **client-side**, no new endpoint). **Step 4.8 is done —
+PHASE 4'S FEATURE WORK IS COMPLETE:** the dashboard flags **open treatments with no next appointment**
+("the single most valuable report in the app", BUILD_PLAN §3) via **`GET /treatments/needs-follow-up`**
++ a section at the top of `/`. The clinical loop is closed: record a visit → keep the treatment open
+→ if no follow-up is booked, the dashboard says so. Now **eight migrations** (head = `999215bea700`,
+unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
+`app.seed_patients` (dev patients). **130 backend tests pass.**
+
+**What remains in Phase 4 is NOT feature work** — only the two carried-forward infra items below
+(clinic settings, clinic timezone). Decide with the user whether to close those out before starting
+Phase 5 (billing), or carry them forward.
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -206,6 +213,8 @@ the original step instructions say otherwise:
 | **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **Literal routes before `/{id}` routes** | — | `GET /treatments/needs-follow-up` (4.8) MUST be declared **before** `GET /{treatment_id}`, or FastAPI matches "needs-follow-up" as a `{treatment_id}` UUID path param and 422s. A test (`test_needs_follow_up_not_shadowed_by_id_route`) pins it. Applies to any future literal sub-path on a router that also has a `/{id}` route. | `backend/app/routers/treatments.py` |
+| **"No next appointment" = no FUTURE non-cancelled appt, not zero appts** | — | 4.8's report flags an `in_progress` treatment unless it has an appointment (linked by `treatment_id`) that is **upcoming AND not cancelled**. A *past* sitting or a *cancelled* future booking does NOT cover it — those are exactly the walk-out cases. "Future" is measured in **UTC** (`now()`), consistent with the app's UTC-everywhere time (clinic-timezone caveat from 3.3 still applies). | `backend/app/routers/treatments.py` |
 | **Inline follow-up = two sequential writes; the visit is the durable one** | — | 4.6 books the follow-up by `POST /visits` **then** `POST /appointments` — NOT one combined endpoint (4.3 deliberately kept booking out of the visit route). If the booking fails (e.g. slot-taken 409) after the visit saved, **the visit is never lost**: the form keeps the created `treatment_id` in state (`savedTreatmentId`) and the next submit only retries the booking. So `recordVisit` now **returns the created visit** (`RecordVisitResult`, not a bare `"ok"`) — a first visit auto-creates its treatment server-side, so the client needs the response to get the id. Any future caller that needs the visit body relies on this. | `frontend/lib/use-visits.ts`, `frontend/app/patients/[id]/visits/new/visit-form.tsx` |
 | **First appointment-CREATE from the UI is `lib/use-appointments.ts`** | — | `POST /appointments` has existed since 3.2 but the calendar only ever *reschedules* (PATCH) — bookings were seed-only. 4.6's `bookAppointment` is the first browser booking path; the follow-up's `dentist_id` defaults to the recorder, and the DB's `appointment_no_overlap` 409 is surfaced inline. The standalone New/Edit-appointment screen (BUILD_PLAN §7) is still unbuilt. | `frontend/lib/use-appointments.ts` |
 | **UI primitives are Base UI, NOT Radix/shadcn — there is no `asChild`** | shadcn/ui in the tech stack | `components/ui/button.tsx` wraps **`@base-ui/react/button`**. Base UI uses a **`render` prop**, not Radix's `asChild`, so `<Button asChild><Link/></Button>` silently fails to compose. For a link that looks like a button, apply **`buttonVariants()`** to the `Link`'s `className` (used on the profile's "Record visit"). Hit in 4.4. | `frontend/components/ui/button.tsx`, `frontend/app/patients/[id]/patient-profile.tsx` |
@@ -232,6 +241,82 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.8: dashboard — open treatments with no next appointment
+
+**Status:** complete — a clinic-wide read query + a dashboard section, verified (130 backend tests
+pass; lint + build + Docker image green; every discriminating state transition proven live). For
+commit. **No migration** — every column and FK already existed. **This finishes Phase 4's feature
+work**, and it's the report BUILD_PLAN §3 calls "the single most valuable in the app."
+
+### Why this matters
+An `in_progress` treatment with no upcoming appointment is a patient mid-course whom nobody booked
+back in — revenue walking out the door. The pieces were all in place: treatments carry a status
+(4.2/4.5) and 4.6's inline follow-up links appointments to treatments via `appointment.treatment_id`.
+
+### Scope decisions (confirmed with user)
+- **Flag = `in_progress` AND no future non-cancelled appointment** on the treatment. A *past* sitting
+  or a *cancelled* future booking does NOT cover it — the "zero appointments" shortcut would wrongly
+  clear those. Cancelled excluded like the booking rules (`status != 'cancelled'`).
+- **New read `GET /treatments/needs-follow-up`** (any active staff, clinic-wide, no `patient_id`),
+  returning each row's `patient_name` (joined) + `last_visit_date` (max visit).
+- **On the dashboard (`/`), above today's schedule** — highest-value first. Not a `/reports` page
+  (Phase 6).
+- **Any dentist's future appointment counts** (single-dentist clinic).
+
+### Built — backend (no migration)
+- `app/schemas/treatment.py` — `TreatmentNeedsFollowUp` (+ `patient_name`, nullable `last_visit_date`)
+  and `NeedsFollowUpResponse`.
+- `app/routers/treatments.py` — `GET /treatments/needs-follow-up`, declared **before**
+  `GET /{treatment_id}` (else "needs-follow-up" parses as a UUID → 422). Query: `in_progress`,
+  `~exists()` correlated subquery for a future non-cancelled appointment, join `Patient` for the
+  name, `func.max(Visit.visit_date)` scalar subquery for last-seen, ordered longest-unseen-first
+  (NULLs top). "Now" = `datetime.now(timezone.utc)`.
+- `tests/test_treatments.py` — +9: no-appt→flagged, future-appt→cleared, **past-only→still flagged**,
+  **cancelled-future→still flagged**, completed→never flagged, `patient_name` + latest
+  `last_visit_date`, null last-visit, auth required, and **route-not-shadowed-by-`/{id}`**. Fixture
+  now cleans visits + appointments (FK order). 121 → **130**.
+
+### Built — frontend
+- `lib/use-treatments.ts` — `useNeedsFollowUp()` (clinic-wide, `refetch`) + `TreatmentNeedsFollowUp`
+  type.
+- `app/needs-follow-up.tsx` (**new**) — an amber-bordered table (patient → profile link, treatment +
+  tooth, "last seen" via `formatVisitDate` or "no visits yet"). Empty state phrased as reassurance:
+  "All open treatments have a follow-up booked."
+- `app/page.tsx` — renders `<NeedsFollowUp/>` **above** `<TodayDashboard/>`. `today-dashboard.tsx`
+  untouched (the two sections are independent).
+
+### No new deps / backend model / migration / env / CI
+
+### Verified
+- **130 backend tests pass** in-container against real Postgres.
+- Frontend **`lint` + `build` green**; `/` still dynamic; Docker frontend image rebuilds.
+- **Live against the compose Postgres** — every state transition of the report: open+unbooked →
+  **flagged** (with patient name + last-seen) → book a **future** follow-up → **drops off** → **cancel
+  it → reappears** (the case that proves "zero appointments" would be wrong) → only a **past**
+  appointment → **still flagged** → **complete** the treatment → **drops off**; a treatment with no
+  visits reports `last_visit_date: null`. Cleaned up.
+- **Through Caddy:** `/api/treatments/needs-follow-up` no token → **401**; `/` signed-out → **307 →
+  /login**.
+
+### What was NOT browser-clicked (honest note)
+Same caveat as 4.4–4.7: the query is proven live end to end and the section is wired + type-checked,
+but the dashboard **wasn't clicked in a browser** (auth faked). **Handed to the user for the visual
+click-through** — the amber section at the top of `/`, and confirming a treatment drops off it after
+booking a follow-up from the visit screen (the 4.6 → 4.8 loop).
+
+### Carried forward (Phase 4 infra, not features)
+- **Clinic settings** — hours + slot size, hardcoded in `lib/week.ts` (`DAY_START_HOUR`,
+  `DAY_END_HOUR`, `SLOT_MIN`); the follow-up duration default and the week grid both use them.
+- **Clinic timezone** — the UTC-everywhere caveat (3.3). "Future" in this report, `visit_date`, and
+  the calendar day bounds are all UTC; the clinic is IST. Needs a clinic-timezone setting.
+- **Decide with the user:** close these two out (a short "Phase 4 wrap") before **Phase 5 (billing)**,
+  or carry them forward. They are the only Phase 4 items left.
+
+### Suggested commit
+`feat: flag treatments missing follow-ups`
 
 ---
 

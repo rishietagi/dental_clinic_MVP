@@ -23,10 +23,12 @@ from app.auth import get_current_claims
 from app.config import settings
 from app.db import SessionLocal
 from app.main import app
+from app.models.appointment import Appointment
 from app.models.audit_log import AuditLog
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 from app.models.treatment import Treatment
+from app.models.visit import Visit
 
 client = TestClient(app)
 
@@ -86,6 +88,17 @@ def ctx(db_available):
         ):
             db.delete(row)
             db.commit()
+        # FK order: visits + appointments reference treatments, so delete them
+        # first (4.8 flag tests create both).
+        for pid in (patient.id, other.id):
+            for v in list(db.scalars(select(Visit).where(Visit.patient_id == pid))):
+                db.delete(v)
+                db.commit()
+            for a in list(
+                db.scalars(select(Appointment).where(Appointment.patient_id == pid))
+            ):
+                db.delete(a)
+                db.commit()
         for pid in (patient.id, other.id):
             for t in list(
                 db.scalars(select(Treatment).where(Treatment.patient_id == pid))
@@ -306,3 +319,94 @@ def test_receptionist_cannot_change_lifecycle(ctx):
         app.dependency_overrides[get_current_claims] = lambda: {"sub": str(ctx.staff.id)}
         ctx.db.delete(ctx.db.get(StaffUser, recep.id))
         ctx.db.commit()
+
+
+# --- needs-follow-up report (step 4.8) ---------------------------------------
+
+def _appt(ctx, treatment, *, days_from_now: float, status: str = "booked") -> Appointment:
+    a = Appointment(
+        patient_id=treatment.patient_id,
+        treatment_id=treatment.id,
+        start_time=datetime.now(timezone.utc) + timedelta(days=days_from_now),
+        status=status,
+    )
+    ctx.db.add(a)
+    ctx.db.commit()
+    return a
+
+
+def _needs_follow_up_ids(ctx) -> set:
+    resp = ctx.client.get("/treatments/needs-follow-up")
+    assert resp.status_code == 200, resp.text
+    return {row["id"] for row in resp.json()["items"]}
+
+
+def test_needs_follow_up_requires_auth():
+    assert client.get("/treatments/needs-follow-up").status_code in (401, 403)
+
+
+def test_open_treatment_with_no_appointment_is_flagged(ctx):
+    t = _make(ctx, "RCT, unbooked")
+    assert str(t.id) in _needs_follow_up_ids(ctx)
+
+
+def test_future_appointment_clears_the_flag(ctx):
+    t = _make(ctx, "RCT, booked back in")
+    _appt(ctx, t, days_from_now=7)
+    assert str(t.id) not in _needs_follow_up_ids(ctx)
+
+
+def test_only_a_past_appointment_still_flags(ctx):
+    """The case a 'zero appointments' shortcut would miss: the sitting already
+    happened, the next one still isn't booked."""
+    t = _make(ctx, "RCT, last sitting in the past")
+    _appt(ctx, t, days_from_now=-7)
+    assert str(t.id) in _needs_follow_up_ids(ctx)
+
+
+def test_cancelled_future_appointment_still_flags(ctx):
+    t = _make(ctx, "RCT, follow-up cancelled")
+    _appt(ctx, t, days_from_now=7, status="cancelled")
+    assert str(t.id) in _needs_follow_up_ids(ctx)
+
+
+def test_completed_treatment_is_never_flagged(ctx):
+    t = _make(ctx, "Finished, no appt", status="completed")
+    assert str(t.id) not in _needs_follow_up_ids(ctx)
+
+
+def test_flag_carries_patient_name_and_last_visit(ctx):
+    t = _make(ctx, "RCT with visits")
+    # Two visits; the report should carry the latest date.
+    older = Visit(
+        patient_id=ctx.patient.id, treatment_id=t.id,
+        visit_date=datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc),
+    )
+    newer = Visit(
+        patient_id=ctx.patient.id, treatment_id=t.id,
+        visit_date=datetime(2026, 8, 9, 10, 0, tzinfo=timezone.utc),
+    )
+    ctx.db.add_all([older, newer])
+    ctx.db.commit()
+
+    row = next(
+        r for r in ctx.client.get("/treatments/needs-follow-up").json()["items"]
+        if r["id"] == str(t.id)
+    )
+    assert row["patient_name"] == ctx.patient.name
+    assert row["last_visit_date"].startswith("2026-08-09")
+
+
+def test_flag_last_visit_none_when_no_visits(ctx):
+    t = _make(ctx, "Open, never recorded")
+    row = next(
+        r for r in ctx.client.get("/treatments/needs-follow-up").json()["items"]
+        if r["id"] == str(t.id)
+    )
+    assert row["last_visit_date"] is None
+
+
+def test_needs_follow_up_not_shadowed_by_id_route(ctx):
+    """The literal path resolves to the report, not GET /{treatment_id} (which
+    would 422 trying to parse 'needs-follow-up' as a UUID)."""
+    assert ctx.client.get("/treatments/needs-follow-up").status_code == 200
