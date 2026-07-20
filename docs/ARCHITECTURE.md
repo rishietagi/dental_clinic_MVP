@@ -420,16 +420,15 @@ button is hidden for other roles and for archived patients — convenience, with
 guard: `recordVisit` maps **403** ("only a dentist can record visits") and **409** ("that treatment is
 already completed") to distinct inline messages, because both are outcomes a real user will hit.
 
-The profile also gained a flat **visit history** (date, treatment, status, notes, procedure names).
-The status shown belongs to the *treatment*, so every sitting on a finished thread reads "completed" —
-correct, since it describes the thread's current state rather than that day's work.
-
-**4.5** added a compact **Treatments** section to the profile (above the history): each treatment's
-title, tooth, status, and — for dentists/admins — a **Close** or **Reopen** button calling the
-lifecycle endpoints. The treatments and visits hooks are lifted into the profile component so a
-lifecycle change refetches both (closing a treatment changes the status shown against its visits).
-The richer Treatments tab with visits nested under each treatment is still **4.7**; this compact
-list is its seed.
+**4.5** added a **Treatments** section with close/reopen; **4.7** grew it into the profile's main
+clinical view: **one Treatments section, each treatment expandable to its own visits** (BUILD_PLAN
+§7's "open + past, each expandable to its visits"). The separate flat visit-history card is gone —
+a visit now shows once, under the treatment it belongs to, which is how the clinical model actually
+threads them (§3). Each treatment card carries title/tooth/status, a visit count, the Close/Reopen
+button, and a `▸/▾` toggle (open treatments start expanded, completed ones collapsed). The grouping
+is **client-side**: `GET /visits?patient_id=` already returns every visit with its `treatment_id`
+(newest first), so the profile buckets them into a `Map` — no nested endpoint. Both the treatments
+and visits hooks are lifted into the profile component so a lifecycle change refetches both.
 
 **4.6** added the **inline follow-up scheduler** to the visit form (BUILD_PLAN §3: book the next
 sitting in the same flow, not a separate trip to the calendar). It's optional and off by default, and

@@ -30,9 +30,12 @@ visit history on the profile. **Step 4.5 is done:** the **treatment lifecycle** 
 Close/Reopen controls in a compact Treatments section on the profile. **Step 4.6 is done:** the
 **inline follow-up scheduler** on the visit form — after recording, it books the next appointment
 linked to the treatment (`appointment.treatment_id`, first use of that FK from the UI, and the
-**first booking-from-UI path** at all). **Next is step 4.7** — the patient profile Treatments tab
-with visits nested. Now **eight migrations** (head = `999215bea700`, unchanged since 4.2) and **eight
-models**. Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
+**first booking-from-UI path** at all). **Step 4.7 is done:** the patient profile now shows
+**treatments each expandable to their nested visits** (merged from the old flat Treatments list +
+separate visit-history card; grouped **client-side**, no new endpoint). **Next is step 4.8** — the
+dashboard flag for open treatments with no next appointment. Now **eight migrations** (head =
+`999215bea700`, unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
+`app.seed_patients` (dev patients).
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -229,6 +232,70 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.7: patient profile — treatments with visits nested
+
+**Status:** complete — pure frontend, one file, verified (121 backend tests still pass; lint + build
++ Docker image green; the grouping data path proven live). For commit. **No backend, no endpoint, no
+migration.** This makes the profile show the clinical model the way it actually is — a treatment and
+its sittings together (BUILD_PLAN §3, §7).
+
+### Scope decisions (confirmed with user)
+- **Group client-side.** `usePatientVisits` already returns every visit carrying `treatment_id` plus
+  its treatment summary + procedures; `usePatientTreatments` gives the treatments (open-first). Bucket
+  visits under their treatment in the browser — no nested endpoint, which would just duplicate
+  `GET /visits?treatment_id=`.
+- **One merged Treatments section**, each treatment expandable. Replaces the old flat Treatments list
+  (4.5) **and** the separate Visit history card (4.4) — so a visit shows **once**, under its thread.
+  Open treatments expanded by default; completed ones collapsed.
+- **Show every visit, even bare ones** — a visit with no notes/procedures still renders its date +
+  "No notes recorded"; a sitting that happened must not vanish.
+
+### Built (all in `app/patients/[id]/patient-profile.tsx`)
+- `TreatmentsSection` — builds a `Map<treatment_id, Visit[]>` from the visits list (preserving the
+  hook's newest-first order per treatment), merges the loading/error state of **both** hooks, and
+  renders one card per treatment. A **dev-only** `console.warn` flags a visit whose treatment isn't
+  in the list (can't happen; keeps it debuggable) rather than dropping it.
+- `TreatmentCard` — title, tooth, `TreatmentStatus`, visit count, the 4.5 Close/Reopen button
+  (unchanged logic), and a native `▸/▾` expand toggle (`aria-expanded`, seeded open for
+  `in_progress`). Expanded → the treatment's visits, or "No visits recorded yet."
+- `VisitRow` — slimmed: the treatment title/status moved to the parent card, so a row is now just
+  date + complaint + notes + procedures, with a "No notes recorded." fallback.
+- **Removed:** the standalone `VisitHistory` card. Its data now lives under each treatment.
+
+### Reused (no new hooks/endpoint)
+`usePatientTreatments`, `usePatientVisits`, `closeTreatment`/`reopenTreatment`, `TreatmentStatus`,
+`formatVisitDate`, the `MutationResult` handling, `Card`/`Button`.
+
+### No new deps / backend / migration / env / CI
+Native `<button>` toggle + client-side grouping. Pure frontend, like 4.6.
+
+### Verified
+- **121 backend tests still pass** (regression check — no backend change).
+- Frontend **`lint` + `build` green**; `/patients/[id]` still dynamic; Docker frontend image rebuilds.
+- **Live against the compose Postgres** (built the render shapes, checked the grouping the client
+  does): a **3-sitting open RCT** buckets all three visits **newest-first**; a **completed
+  single-visit cleaning** groups its one visit; a **bare visit** (no notes/procedures) is present and
+  will show "No notes recorded"; treatments come back **open-first**; **every visit carries a
+  treatment_id** and there are **no orphans**. Cleaned up.
+
+### What was NOT browser-clicked (honest note)
+Same caveat as 4.4–4.6: the grouping/expand is wired + type-checked and the data paths are proven
+live, but the **expand/collapse interaction wasn't clicked in a browser** (auth faked). **Handed to
+the user for the visual click-through** — worth watching: an open RCT expanded by default showing its
+sittings, a completed treatment collapsed, and Close flipping a card + refetching.
+
+### Carried forward → 4.8
+- **Dashboard: open treatments with no next appointment** — "the single most valuable report in the
+  app" (BUILD_PLAN §3). The pieces are in place: treatments have a status, and 4.6's follow-ups link
+  appointments to treatments via `appointment.treatment_id`, so the query is "in_progress treatments
+  with no future appointment on that treatment_id". Likely the first *new read endpoint* since 4.4.
+- Still open in Phase 4: **clinic settings** (hours + slot size) and the **clinic timezone**.
+
+### Suggested commit
+`feat: show treatment history`
 
 ---
 
