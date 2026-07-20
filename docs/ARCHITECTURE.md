@@ -260,7 +260,14 @@ PK → roles).
 /appointments/{id}`, `POST /appointments/{id}/status`), and the **treatment catalogue**
 (`GET /treatment-items`, `GET/PATCH /treatment-items/{id}`, `POST /treatment-items`,
 `POST /treatment-items/{id}/deactivate|activate`), and the **visit recording API** (`POST /visits`,
-`GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`).
+`GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`), and the
+**treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`).
+
+`app/routers/treatments.py` (4.4) is **read-only on purpose**: treatments are created by
+`POST /visits` and their lifecycle is 4.5, so there are no write routes and a test asserts POST/PATCH
+return 405. `patient_id` is required — an unfiltered list of every treatment in the clinic isn't a
+screen anyone has — and results are ordered **open-first, then newest**, because every caller (the
+visit form's picker, 4.8's report) is looking for actionable work.
 
 ### Visit recording + the auto-create rule (step 4.3)
 
@@ -380,6 +387,37 @@ one endpoint that returns `medical_notes`) and shows demographics in a `Card` pl
 non-empty (BUILD_PLAN §1: the one diabetic/blood-thinner patient is exactly where it matters).
 Read-only this step; list rows link into it. The id is a **path segment** (allowed — the
 no-id-in-URL rule is about query strings).
+
+### Visit record screen (step 4.4)
+
+`/patients/{id}/visits/new` (`app/patients/[id]/visits/new/`) is the screen Phase 4 exists for — the
+first UI that writes clinical data. It's nested under the patient because the patient is always known
+first, and because that keeps the **medical-notes banner on screen while recording**, which is
+precisely when allergies and blood thinners matter. The banner now lives in
+`components/medical-notes-banner.tsx`, shared with the profile so a safety warning can't drift into
+two versions.
+
+The form is a direct expression of the 4.3 `POST /visits` contract. Its central control is a **radio
+group**: the patient's open treatments (from `GET /treatments?status=in_progress`) plus "Start new
+treatment". That makes the API's exactly-one-of rule structural — the UI cannot express "both" or
+"neither" — and `lib/use-visits.ts` reinforces it in the type system, where `VisitCreateBody` is a
+**discriminated union** so an invalid body fails to compile. It defaults to the single open treatment
+when there's exactly one, otherwise to "new".
+
+The rest is complaint + clinical notes, a procedure row builder over the active catalogue
+(`useTreatmentItems(false)`, prices shown via `formatPrice` for context only — never arithmetic), and
+the **"This treatment is now complete"** checkbox that drives `treatment_status` and therefore
+auto-close. Submit is disabled in flight, because a double-submit would record the sitting twice.
+
+Recording is gated to dentists/admins via `useCurrentStaff()`, and the profile's **Record visit**
+button is hidden for other roles and for archived patients — convenience, with the API as the actual
+guard: `recordVisit` maps **403** ("only a dentist can record visits") and **409** ("that treatment is
+already completed") to distinct inline messages, because both are outcomes a real user will hit.
+
+The profile also gained a flat **visit history** (date, treatment, status, notes, procedure names).
+The status shown belongs to the *treatment*, so every sitting on a finished thread reads "completed" —
+correct, since it describes the thread's current state rather than that day's work. The richer
+Treatments tab with visits nested under each treatment is **4.7**.
 
 ### Treatment catalogue + the first role split (step 4.1)
 

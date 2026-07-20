@@ -59,11 +59,17 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 
 | Choice | Version | Why |
 |---|---|---|
-| @base-ui/react | ^1.6.0 | Unstyled primitives that shadcn components build on. |
+| @base-ui/react | ^1.6.0 | Unstyled primitives that shadcn components build on. **Base UI, not Radix** — see the note below. |
 | class-variance-authority | ^0.7.1 | Component style variants. |
 | clsx + tailwind-merge | ^2.1.1 / ^3.6.0 | Conditional class names; back the `cn()` helper in `lib/utils.ts`. |
 | lucide-react | ^1.24.0 | Icon set shadcn components use. |
 | tw-animate-css | ^1.4.0 | Animation utilities for Tailwind 4. |
+
+> **No `asChild` — these primitives are Base UI, not Radix.** Most shadcn examples online assume
+> Radix and compose with `<Button asChild><Link/></Button>`. That prop **does not exist here** and is
+> silently ignored. Base UI composes via a **`render` prop** instead. For a link styled as a button,
+> the simplest option is to apply **`buttonVariants()`** to the `Link`'s `className` — which is what
+> the profile's "Record visit" does (4.4), and it avoids nesting interactive elements.
 
 **Chosen deliberately** (approved additions beyond the scaffold):
 

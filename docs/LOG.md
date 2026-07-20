@@ -23,9 +23,11 @@ view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 o
 `73aeddd50693`). **Step 4.2 is done:** the **clinical core models** — `treatment` + `visit` +
 `procedure_performed`, and **`appointment.treatment_id` finally got its real FK** (migration
 `999215bea700`). **Step 4.3 is done:** the **visit recording API** (`POST /visits` auto-creates and
-auto-closes treatments; the project's **second role-split resource**). **Next is step 4.4** — the
-visit record screen. Now **eight migrations** (head = `999215bea700`, unchanged by 4.3) and **eight
-models**. Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
+auto-closes treatments; the project's **second role-split resource**). **Step 4.4 is done:** the
+**visit record screen** at `/patients/{id}/visits/new`, plus a read-only **`GET /treatments`** and
+visit history on the profile. **Next is step 4.5** — treatment lifecycle (close/reopen). Now **eight
+migrations** (head = `999215bea700`, unchanged since 4.2) and **eight models**. Two seed scripts:
+`app.seed` (admin) and `app.seed_patients` (dev patients).
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -101,6 +103,20 @@ anything is written** (404, not a 500 from the FK). `dentist_id` defaults to who
 Auto-created treatments get their own audit row (`details.auto_created_by_visit = true`). The rule
 lives in `services/visits.py` (`resolve_treatment`), which raises domain exceptions, not
 `HTTPException`, so the router owns status codes and 4.6 can reuse it.
+
+**Visit screen + treatment reads (4.4):** the visit record screen is
+**`/patients/{id}/visits/new`** (`app/patients/[id]/visits/new/`), reached from a **Record visit**
+button on the patient profile (dentist/admin, hidden for archived patients). The treatment choice is
+a **radio group** — the patient's open treatments plus "Start new treatment" — so the API's
+exactly-one-of rule is unrepresentable-if-wrong in the UI. It defaults to the single open treatment
+when there's exactly one, else to "new". **`GET /treatments?patient_id=&status=`** and
+**`GET /treatments/{id}`** were added for it (read-only, any active staff): `patient_id` is
+**required**, and results are **open-first, then newest**, because every caller wants actionable
+threads on top. **There are still NO treatment write routes** — treatments are created by
+`POST /visits`, and close/reopen is **4.5**; `test_no_write_routes` asserts POST/PATCH return 405.
+The profile also gained a flat **visit history** (the richer nested Treatments tab is 4.7). The
+medical-notes banner was **extracted to `components/medical-notes-banner.tsx`** and is shown on the
+visit form too — it matters most while treating.
 
 **Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
 `dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` →
@@ -182,6 +198,8 @@ the original step instructions say otherwise:
 | **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **UI primitives are Base UI, NOT Radix/shadcn — there is no `asChild`** | shadcn/ui in the tech stack | `components/ui/button.tsx` wraps **`@base-ui/react/button`**. Base UI uses a **`render` prop**, not Radix's `asChild`, so `<Button asChild><Link/></Button>` silently fails to compose. For a link that looks like a button, apply **`buttonVariants()`** to the `Link`'s `className` (used on the profile's "Record visit"). Hit in 4.4. | `frontend/components/ui/button.tsx`, `frontend/app/patients/[id]/patient-profile.tsx` |
+| **`GET /treatments` is read-only until 4.5** | — | Added during a *frontend* step (4.4) because the visit form's picker needed the patient's open treatments. Deliberately **no POST/PATCH**: treatments are created by `POST /visits` (4.3) and their lifecycle is 4.5. `test_no_write_routes` pins it (405 on POST/PATCH) so a write route can't appear unnoticed. Ordering is **open-first, then newest** — the picker and 4.8's report both want actionable threads first. | `backend/app/routers/treatments.py` |
 | **`POST /visits` auto-create/auto-close contract** | Roadmap says only "auto-creates treatment if new" | The request carries **exactly one** of `treatment_id` / `treatment` stub (else 422), plus `treatment_status`. `completed` sets `status` **and** `closed_at` in the same transaction — so a single-visit cleaning is one call that leaves nothing open (BUILD_PLAN §3). Auto-close is **explicit on the request**, never inferred from which procedures were performed. **4.4 (screen) and 4.6 (inline follow-up) both depend on this exact shape** — don't change it without updating them. | `backend/app/services/visits.py`, `backend/app/routers/visits.py` |
 | **Second role-split resource: visits are dentist-write** | Phases 2–3 let any active staff do everything | Visit writes are `require_role("dentist","admin")`; reads stay `get_current_staff`. BUILD_PLAN §2 gives "record visits/treatments" to the Dentist — clinical notes are the dentist's record — while the receptionist still needs visit history for billing (5.2) and follow-ups. A test asserts a receptionist gets **403** on POST/PATCH but **200** on GET. | `backend/app/routers/visits.py` |
 | **Services raise domain exceptions, not HTTPException** | — | `services/visits.py` raises `TreatmentNotFound` / `TreatmentPatientMismatch` / `TreatmentAlreadyClosed`; the router maps them to 404/409/409. Keeps the rule unit-testable without HTTP and leaves status codes in one place. Follow this for future service modules. | `backend/app/services/visits.py` |
@@ -204,6 +222,103 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.4: visit record screen
+
+**Status:** complete — a small read-only backend addition + the visit form + profile history,
+verified (114 backend tests pass; lint + build + Docker image green; the form's whole data path
+proven live; guards checked through Caddy). For commit. **No migration.** **This is the screen Phase
+4 exists for** — the first UI that writes clinical data.
+
+### Scope decisions (confirmed with user)
+- **Route `/patients/{id}/visits/new`**, reached from a **Record visit** button on the profile. The
+  patient is known first, and keeping patient context means the **medical-notes banner stays on
+  screen while recording** — exactly when "diabetic, on blood thinners" matters.
+- **Treatment choice is a radio group** (open treatments + "Start new treatment"), mirroring the
+  API's exactly-one-of rule so an invalid request can't be built in the UI.
+- **Added `GET /treatments?patient_id=`** — the picker needed it and no such endpoint existed.
+  Read-only; treatment writes stay absent until 4.5.
+- **Full form** — complaint, notes, catalogue procedures with tooth refs, and the finished toggle.
+  Anything less can't record a real visit or be invoiced in Phase 5.
+- **No inline follow-up** (4.6), **no lifecycle controls** (4.5), **no nested Treatments tab** (4.7).
+
+### Built — backend (read-only, no migration)
+- `app/schemas/treatment.py` — `TreatmentRead` + `TreatmentListResponse`. (`TreatmentSummary` in
+  `schemas/visit.py` stays as the trimmed shape nested inside a visit.)
+- `app/routers/treatments.py` — `GET /treatments?patient_id=&status=` (patient_id **required**;
+  `status` is a `Literal` → 422; **open-first then newest** via a `case()` sort key) and
+  `GET /treatments/{id}` (404). Both `get_current_staff`, unaudited. Registered in `main.py`.
+- `tests/test_treatments.py` — 10 tests: patient scoping, status filter, **open-first ordering
+  asserted specifically** (the closed one is deliberately the newest, so a plain date sort would
+  fail it), newest-within-group, required `patient_id` → 422, unknown status → 422, get/404, empty
+  list, and **`test_no_write_routes`** (POST/PATCH → 405). 104 → **114**.
+
+### Built — frontend
+- `lib/use-treatments.ts` — `usePatientTreatments(patientId, {openOnly})`, cloning the existing hook
+  pattern (module `apiUrl`, auth headers, refetch nonce).
+- `lib/use-visits.ts` — `usePatientVisits`, `recordVisit(body)`, `formatVisitDate`. **`VisitCreateBody`
+  is a discriminated union** (`{treatment_id}` xor `{treatment}`) so the invalid body is a *type*
+  error, not just a runtime 422. Maps 403 → "forbidden" (not a dentist) and 409 → "conflict"
+  (treatment already completed), and surfaces the API's `detail` for 404/422.
+- `components/medical-notes-banner.tsx` — **extracted** from `patient-profile.tsx` so the profile and
+  the visit form render the identical banner (a safety warning is the last thing to let drift).
+- `app/patients/[id]/visits/new/page.tsx` + `visit-form.tsx` — the form: treatment radio group
+  (+ title/tooth fields when new), complaint + clinical notes (native `<textarea>` styled to match
+  `Input`), a procedure row builder (`<select>` of active catalogue items + optional tooth + price
+  for context via `formatPrice`), and the **"This treatment is now complete"** checkbox driving
+  `treatment_status`. Submit is disabled while in flight (a double-submit would record two visits);
+  on success it routes back to the profile. Dentist gate via `useCurrentStaff()`.
+- `app/patients/[id]/patient-profile.tsx` — **Record visit** button (dentist/admin, hidden when
+  archived) + a flat **visit history** (date, treatment title, status, notes, procedure names).
+
+### Reused (wrote no new versions)
+`useTreatmentItems` + `formatPrice` + the `MutationResult` union (4.1), `usePatient` (2.4),
+`useCurrentStaff` (1.4), `components/ui/{button,card,input}`.
+
+### Bug hit + fixed during build (worth remembering)
+**`<Button asChild>` doesn't exist in this project.** `components/ui/button.tsx` wraps
+**`@base-ui/react/button`**, not Radix — Base UI composes via a `render` prop, so `asChild` is
+silently ignored. Fixed by applying **`buttonVariants()`** to the `Link`'s `className`, which also
+avoids nesting a button inside a link. Recorded as a standing decision; it will recur whenever a
+link needs to look like a button.
+
+### No new deps / migration / env / CI
+Native `<select>`, `<textarea>`, `<input type="checkbox">` — consistent with the native date input
+from 3.3. Nothing added to `package.json`.
+
+### Verified
+- **114 backend tests pass** in-container against real Postgres.
+- Frontend **`lint` + `build` green**; `/patients/[id]/visits/new` registered as a **dynamic route
+  (`ƒ`)**; Docker frontend image rebuilds clean.
+- **Live against the compose Postgres** — the form's exact data path, end to end: picker empty for a
+  new patient → **cleaning recorded with "complete" ticked → treatment auto-created AND closed**, and
+  **still zero open treatments** afterwards → **RCT sitting 1** left open → picker now offers it →
+  **ordering puts the open RCT above the newer completed cleaning** → **sitting 2 continues the same
+  treatment** (2 visits, 1 treatment) → history reads back with procedure names and tooth refs →
+  both/neither treatment forms **422** → **receptionist: GET 200 on visits and treatments, POST 403**.
+  Cleaned up.
+- **Through Caddy:** `/patients/{id}/visits/new` signed-out → **307 → /login**; `/api/treatments`
+  with no token → **401**; `/api/health` → 200.
+
+### What was NOT browser-clicked (honest note)
+The live run drove the **real API over HTTP against the real database** with the exact bodies the
+form builds, and the route guard was checked through Caddy — but the **form itself was not clicked
+in a browser**, and auth was faked rather than using a real Supabase token (same caveat as 4.3;
+the role split was still exercised through `require_role`). The build type-checks the wiring.
+**Handed to the user for a visual click-through**, as with 3.4's drag gesture.
+
+### Carried forward → 4.5
+- **Treatment lifecycle**: close a treatment without recording a visit, and **reopen a completed
+  one**. The 409 on "that treatment is already completed" currently has no in-app remedy — 4.5 is
+  where it gets one, and where `GET /treatments` likely gains its first write route.
+- Still open in Phase 4: **clinic settings** (hours + slot size) and the **clinic timezone**
+  (`visit_date` renders in the browser's zone, same caveat as 3.3). Then 4.6 inline follow-ups,
+  4.7 the nested Treatments tab, 4.8 the open-treatments dashboard.
+
+### Suggested commit
+`feat: add visit record screen`
 
 ---
 

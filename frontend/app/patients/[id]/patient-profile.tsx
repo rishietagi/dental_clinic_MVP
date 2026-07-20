@@ -1,16 +1,24 @@
 "use client";
 
-// Patient profile — Overview only (demographics + the medical-notes banner).
-// Read-only this step; no edit/archive controls, no Treatments/Billing tabs yet.
+// Patient profile — Overview (demographics + medical-notes banner) plus, from
+// 4.4, a "Record visit" action and a read-only visit history.
+//
+// The history here is deliberately flat (one row per visit, newest first). The
+// richer Treatments tab — treatments expandable to their nested visits — is 4.7.
+// Demographics remain read-only; there's still no edit/archive UI.
 
 import Link from "next/link";
-import { TriangleAlert } from "lucide-react";
 
+import { MedicalNotesBanner } from "@/components/medical-notes-banner";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { usePatient, type Patient } from "@/lib/use-patient";
+import { useCurrentStaff } from "@/lib/use-current-staff";
+import { usePatient } from "@/lib/use-patient";
+import { formatVisitDate, usePatientVisits, type Visit } from "@/lib/use-visits";
 
 export function PatientProfile({ patientId }: { patientId: string }) {
   const state = usePatient(patientId);
+  const staffState = useCurrentStaff();
 
   if (state.kind === "loading") {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -33,6 +41,10 @@ export function PatientProfile({ patientId }: { patientId: string }) {
   }
 
   const p = state.patient;
+  const canRecord =
+    staffState.kind === "staff" &&
+    (staffState.staff.roles.includes("dentist") ||
+      staffState.staff.roles.includes("admin"));
 
   return (
     <div className="flex flex-col gap-6">
@@ -60,7 +72,104 @@ export function PatientProfile({ patientId }: { patientId: string }) {
           </dl>
         </CardContent>
       </Card>
+
+      {/* Dentist-only, and hidden for an archived patient — recording a visit
+          against someone archived is almost certainly a mistake. The API is the
+          real guard either way. */}
+      {canRecord && !p.archived && (
+        <div>
+          {/* Styled as a button but rendered as a real link (this Button is
+              Base UI, which has no `asChild`; buttonVariants gives the look
+              without nesting interactive elements). */}
+          <Link
+            href={`/patients/${patientId}/visits/new`}
+            className={buttonVariants()}
+          >
+            Record visit
+          </Link>
+        </div>
+      )}
+
+      <VisitHistory patientId={patientId} />
     </div>
+  );
+}
+
+function VisitHistory({ patientId }: { patientId: string }) {
+  const state = usePatientVisits(patientId);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Visit history</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {state.kind === "loading" && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {state.kind === "error" && (
+          <p className="text-sm text-destructive">
+            Couldn’t load visits: {state.message}
+          </p>
+        )}
+        {state.kind === "ready" && state.data.total === 0 && (
+          <p className="text-sm text-muted-foreground">No visits recorded yet.</p>
+        )}
+        {state.kind === "ready" && state.data.total > 0 && (
+          <ul className="flex flex-col divide-y">
+            {state.data.items.map((v) => (
+              <VisitRow key={v.id} visit={v} />
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function VisitRow({ visit }: { visit: Visit }) {
+  const t = visit.treatment;
+  return (
+    <li className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+        <span className="text-muted-foreground">
+          {formatVisitDate(visit.visit_date)}
+        </span>
+        <span className="font-medium">{t.title}</span>
+        {t.tooth_ref && (
+          <span className="text-muted-foreground">tooth {t.tooth_ref}</span>
+        )}
+        <TreatmentStatus status={t.status} />
+      </div>
+      {visit.clinical_notes && (
+        <p className="text-sm whitespace-pre-wrap">{visit.clinical_notes}</p>
+      )}
+      {visit.procedures.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {visit.procedures
+            .map((p) => (p.tooth_ref ? `${p.treatment_item_name} (${p.tooth_ref})` : p.treatment_item_name))
+            .join(" · ")}
+        </p>
+      )}
+    </li>
+  );
+}
+
+// The status belongs to the TREATMENT, not the visit — so every sitting on a
+// finished thread reads "completed". That's correct: it describes the thread's
+// current state, not what happened that day.
+function TreatmentStatus({ status }: { status: string }) {
+  const done = status === "completed";
+  return (
+    <span
+      className={
+        done
+          ? "rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+          : "rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-800 dark:bg-blue-950 dark:text-blue-200"
+      }
+    >
+      {done ? "completed" : "in progress"}
+    </span>
   );
 }
 
@@ -70,24 +179,6 @@ function Field({ label, value }: { label: string; value: string | null }) {
       <dt className="text-muted-foreground">{label}</dt>
       <dd>{value ?? "—"}</dd>
     </>
-  );
-}
-
-// Renders ONLY when there are medical notes. The one diabetic / blood-thinner
-// patient is exactly the case this exists for, so it's deliberately prominent.
-function MedicalNotesBanner({ notes }: { notes: Patient["medical_notes"] }) {
-  if (!notes || !notes.trim()) return null;
-  return (
-    <div
-      role="alert"
-      className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
-    >
-      <TriangleAlert className="mt-0.5 size-5 shrink-0" />
-      <div>
-        <p className="font-medium">Medical notes</p>
-        <p className="whitespace-pre-wrap text-sm">{notes}</p>
-      </div>
-    </div>
   );
 }
 
