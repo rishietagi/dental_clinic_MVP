@@ -27,10 +27,12 @@ auto-closes treatments; the project's **second role-split resource**). **Step 4.
 **visit record screen** at `/patients/{id}/visits/new`, plus a read-only **`GET /treatments`** and
 visit history on the profile. **Step 4.5 is done:** the **treatment lifecycle** —
 `POST /treatments/{id}/close` + `/reopen` (the treatments router's **first write routes**) and
-Close/Reopen controls in a compact Treatments section on the profile. **Next is step 4.6** — the
-inline follow-up scheduler from the visit screen. Now **eight migrations** (head = `999215bea700`,
-unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
-`app.seed_patients` (dev patients).
+Close/Reopen controls in a compact Treatments section on the profile. **Step 4.6 is done:** the
+**inline follow-up scheduler** on the visit form — after recording, it books the next appointment
+linked to the treatment (`appointment.treatment_id`, first use of that FK from the UI, and the
+**first booking-from-UI path** at all). **Next is step 4.7** — the patient profile Treatments tab
+with visits nested. Now **eight migrations** (head = `999215bea700`, unchanged since 4.2) and **eight
+models**. Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -201,6 +203,8 @@ the original step instructions say otherwise:
 | **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **Inline follow-up = two sequential writes; the visit is the durable one** | — | 4.6 books the follow-up by `POST /visits` **then** `POST /appointments` — NOT one combined endpoint (4.3 deliberately kept booking out of the visit route). If the booking fails (e.g. slot-taken 409) after the visit saved, **the visit is never lost**: the form keeps the created `treatment_id` in state (`savedTreatmentId`) and the next submit only retries the booking. So `recordVisit` now **returns the created visit** (`RecordVisitResult`, not a bare `"ok"`) — a first visit auto-creates its treatment server-side, so the client needs the response to get the id. Any future caller that needs the visit body relies on this. | `frontend/lib/use-visits.ts`, `frontend/app/patients/[id]/visits/new/visit-form.tsx` |
+| **First appointment-CREATE from the UI is `lib/use-appointments.ts`** | — | `POST /appointments` has existed since 3.2 but the calendar only ever *reschedules* (PATCH) — bookings were seed-only. 4.6's `bookAppointment` is the first browser booking path; the follow-up's `dentist_id` defaults to the recorder, and the DB's `appointment_no_overlap` 409 is surfaced inline. The standalone New/Edit-appointment screen (BUILD_PLAN §7) is still unbuilt. | `frontend/lib/use-appointments.ts` |
 | **UI primitives are Base UI, NOT Radix/shadcn — there is no `asChild`** | shadcn/ui in the tech stack | `components/ui/button.tsx` wraps **`@base-ui/react/button`**. Base UI uses a **`render` prop**, not Radix's `asChild`, so `<Button asChild><Link/></Button>` silently fails to compose. For a link that looks like a button, apply **`buttonVariants()`** to the `Link`'s `className` (used on the profile's "Record visit"). Hit in 4.4. | `frontend/components/ui/button.tsx`, `frontend/app/patients/[id]/patient-profile.tsx` |
 | **`/treatments` writes = close/reopen ONLY** | — | The treatments router was read-only in 4.4; **4.5 added its first writes: `POST /{id}/close` + `/reopen`** (the `in_progress ⇄ completed` state machine in `services/treatments.py`, illegal transition → 409, audited). There is **still no create or replace** — treatments are born from `POST /visits`. `test_no_create_or_replace_routes` asserts bare `POST /treatments` + `PATCH /{id}` still 405, so a broad write route can't appear unnoticed. Ordering on the reads stays **open-first, then newest**. | `backend/app/routers/treatments.py`, `backend/app/services/treatments.py` |
 | **`POST /visits` auto-create/auto-close contract** | Roadmap says only "auto-creates treatment if new" | The request carries **exactly one** of `treatment_id` / `treatment` stub (else 422), plus `treatment_status`. `completed` sets `status` **and** `closed_at` in the same transaction — so a single-visit cleaning is one call that leaves nothing open (BUILD_PLAN §3). Auto-close is **explicit on the request**, never inferred from which procedures were performed. **4.4 (screen) and 4.6 (inline follow-up) both depend on this exact shape** — don't change it without updating them. | `backend/app/services/visits.py`, `backend/app/routers/visits.py` |
@@ -225,6 +229,76 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.6: inline follow-up scheduler from the visit screen
+
+**Status:** complete — pure frontend on top of existing APIs, verified (121 backend tests still pass;
+lint + build + Docker image green; the two-write flow incl. partial failure proven live). For commit.
+**No backend change, no migration.** **The first booking-from-UI path**, and the first use of
+`appointment.treatment_id` (the FK added in 4.2) from the browser.
+
+### Why this matters (BUILD_PLAN §3)
+The follow-up must be bookable **from inside the visit screen, in the same flow** — "not a separate
+'now go to the calendar' trip. That's the difference between it getting used and not." A forgotten
+follow-up is revenue walking out the door, which 4.8's dashboard exists to catch.
+
+### Scope decisions (confirmed with user)
+- **Record visit first, then book the follow-up** with the returned `treatment_id` — two sequential
+  writes, not one combined endpoint (4.3 kept booking out of `POST /visits`). If the booking fails,
+  **the visit stays saved** and only the booking is retried.
+- **Native date + time + duration inputs** (consistent with the calendar's native date input).
+- **Default `dentist_id` = the recorder**; the existing double-booking 409 is surfaced inline.
+- **Optional, off by default**, and **hidden when "treatment complete" is ticked** (a finished
+  treatment needs no next sitting). Skipping = the 4.8 "open, unbooked" state.
+
+### Built (all frontend)
+- `lib/use-visits.ts` — `recordVisit` now returns **`RecordVisitResult`** (`{status:"ok",visit}` |
+  forbidden | conflict | error) instead of a bare `MutationResult`. The follow-up needs the created
+  visit's `treatment_id`, which for a first visit is server-assigned.
+- `lib/use-appointments.ts` (**new**) — `bookAppointment(body)` → `POST /appointments`, mapping 409
+  (slot taken) / 404 (patient) distinctly. **First appointment-create path from the UI** (the
+  calendar only reschedules). Types the `AppointmentCreate` body.
+- `app/patients/[id]/visits/new/visit-form.tsx` — a **Follow-up** card (only when not "complete"):
+  a "Book a follow-up" checkbox + date/time/duration/reason. `submit` now:
+  1. records the visit (durable write);
+  2. if requested, builds an ISO `start_time` (browser-local, timezone caveat) and books the
+     appointment linked to the treatment, dentist = recorder;
+  3. on a booking failure, keeps `savedTreatmentId` and shows an amber notice — the next submit only
+     **retries the booking**, never re-records the visit. Ticking "complete" clears the follow-up.
+
+### No new deps / backend / migration / env / CI
+Native date/time inputs; existing `POST /appointments`. First pure-frontend step since 3.6.
+
+### Verified
+- **121 backend tests still pass** (regression check — no backend change).
+- Frontend **`lint` + `build` green**; Docker frontend image rebuilds.
+- **Live against the compose Postgres** (the form's two-write flow, reproduced over HTTP):
+  visit + follow-up → appointment created **linked to the treatment**, dentist = recorder, correct
+  start_time → **partial failure**: booking onto a taken slot returns **409 while the visit count
+  still goes 1→2** (the visit is durable) → **retry onto a free slot succeeds without re-recording**
+  → record without a follow-up leaves an open treatment with **0 linked appointments** (the 4.8
+  state) → a "complete" visit books nothing → the follow-ups appear in `GET /appointments?date=`
+  carrying their `treatment_id`. Cleaned up.
+
+### What was NOT browser-clicked (honest note)
+Same caveat as 4.4/4.5: the live run reproduced the form's two writes over real HTTP against the real
+DB, but the **date/time controls, the "book follow-up" toggle, and the partial-failure retry UI were
+not clicked in a browser**, and auth was faked. The build type-checks the wiring. **Handed to the
+user for the visual click-through** — the partial-failure retry (record a visit, aim the follow-up at
+a taken slot, confirm the visit persisted and the booking can be retried) is the bit worth watching.
+
+### Carried forward → 4.7
+- **Patient profile → Treatments tab, visits nested** — expand 4.5's compact treatments list into
+  treatments each expandable to their sittings. The booked follow-ups will show on the calendar and,
+  in **4.8**, drive the "open treatments with no next appointment" dashboard (this step's
+  treatment-linked appointments are exactly what that query keys on).
+- Still open in Phase 4: **clinic settings** (hours + slot size — the follow-up duration defaults to
+  the hardcoded `SLOT_MIN`) and the **clinic timezone** (`start_time` is built browser-local).
+
+### Suggested commit
+`feat: schedule follow-ups from visit record`
 
 ---
 

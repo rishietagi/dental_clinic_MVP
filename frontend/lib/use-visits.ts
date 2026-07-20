@@ -16,7 +16,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
-import type { MutationResult } from "@/lib/use-treatment-items";
 
 export type ProcedureRead = {
   id: string;
@@ -136,13 +135,24 @@ export function usePatientVisits(
   return { ...state, refetch };
 }
 
+// recordVisit returns the CREATED visit on success, not just "ok" — the inline
+// follow-up (4.6) needs the visit's treatment_id, and a first visit auto-creates
+// its treatment server-side, so the id isn't known until the response. The
+// failure branches mirror MutationResult so callers handle 403/409/error the
+// same way they do for other mutations.
+export type RecordVisitResult =
+  | { status: "ok"; visit: Visit }
+  | { status: "forbidden" }
+  | { status: "conflict" }
+  | { status: "error"; message: string };
+
 export async function recordVisit(
   body: VisitCreateBody,
-): Promise<MutationResult> {
-  if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
+): Promise<RecordVisitResult> {
+  if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
     const headers = await authHeaders();
-    if (!headers) return { error: "Not signed in." };
+    if (!headers) return { status: "error", message: "Not signed in." };
 
     const res = await fetch(`${apiUrl}/visits`, {
       method: "POST",
@@ -150,21 +160,25 @@ export async function recordVisit(
       body: JSON.stringify(body),
     });
 
-    if (res.ok) return "ok";
-    if (res.status === 403) return "forbidden";
-    if (res.status === 409) return "conflict";
+    if (res.ok) {
+      const visit = (await res.json()) as Visit;
+      return { status: "ok", visit };
+    }
+    if (res.status === 403) return { status: "forbidden" };
+    if (res.status === 409) return { status: "conflict" };
     // 404 (unknown treatment/catalogue item) and 422 (validation) carry a useful
     // `detail` from the API — surface it rather than a bare status code.
     try {
       const data = (await res.json()) as { detail?: unknown };
-      if (typeof data.detail === "string") return { error: data.detail };
+      if (typeof data.detail === "string") return { status: "error", message: data.detail };
     } catch {
       // fall through to the generic message
     }
-    return { error: `Request failed (${res.status}).` };
+    return { status: "error", message: `Request failed (${res.status}).` };
   } catch (error: unknown) {
     return {
-      error: error instanceof Error ? error.message : "Could not record the visit.",
+      status: "error",
+      message: error instanceof Error ? error.message : "Could not record the visit.",
     };
   }
 }

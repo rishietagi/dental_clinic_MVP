@@ -25,16 +25,18 @@ import { MedicalNotesBanner } from "@/components/medical-notes-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { bookAppointment } from "@/lib/use-appointments";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { usePatient } from "@/lib/use-patient";
 import { formatPrice, useTreatmentItems } from "@/lib/use-treatment-items";
 import { usePatientTreatments, type Treatment } from "@/lib/use-treatments";
+import { SLOT_MIN } from "@/lib/week";
 import {
   recordVisit,
   type ProcedureInput,
+  type RecordVisitResult,
   type VisitCreateBody,
 } from "@/lib/use-visits";
-import type { MutationResult } from "@/lib/use-treatment-items";
 
 const NEW_TREATMENT = "new";
 
@@ -45,13 +47,14 @@ const controlClass =
   "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] " +
   "focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
 
-function messageFor(result: MutationResult): string | null {
-  if (result === "ok") return null;
-  if (result === "forbidden")
+// A visit-record failure -> a user-facing message. `ok` never reaches here.
+function recordVisitMessage(result: RecordVisitResult): string {
+  if (result.status === "forbidden")
     return "Only a dentist can record visits. Ask a dentist to record this one.";
-  if (result === "conflict")
+  if (result.status === "conflict")
     return "That treatment is already completed, so a new sitting can't be added to it. Start a new treatment instead.";
-  return result.error;
+  if (result.status === "error") return result.message;
+  return "Could not record the visit.";
 }
 
 export function VisitForm({ patientId }: { patientId: string }) {
@@ -71,8 +74,20 @@ export function VisitForm({ patientId }: { patientId: string }) {
   const [procedures, setProcedures] = useState<ProcedureInput[]>([]);
   const [finished, setFinished] = useState(false);
 
+  // Inline follow-up (4.6). Off by default; hidden when the treatment is being
+  // completed (a finished treatment needs no next sitting).
+  const [wantFollowUp, setWantFollowUp] = useState(false);
+  const [fuDate, setFuDate] = useState("");
+  const [fuTime, setFuTime] = useState("");
+  const [fuDuration, setFuDuration] = useState(String(SLOT_MIN));
+  const [fuReason, setFuReason] = useState("");
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Once the visit is recorded, a failed follow-up must NOT re-record it. This
+  // holds the created treatment id so a retry only books the appointment.
+  const [savedTreatmentId, setSavedTreatmentId] = useState<string | null>(null);
 
   const openTreatments: Treatment[] =
     treatmentsState.kind === "ready" ? treatmentsState.data.items : [];
@@ -98,12 +113,81 @@ export function VisitForm({ patientId }: { patientId: string }) {
     );
   }, [staffState]);
 
+  // The recorder's id, used as the follow-up's dentist by default.
+  const recorderId =
+    staffState.kind === "staff" ? staffState.staff.id : null;
+
+  // Build the ISO start_time from the native date + time inputs, in the
+  // browser's local zone (same convention as the calendar — the clinic-timezone
+  // fix is still Phase 4). Returns null if either field is blank.
+  function followUpStart(): string | null {
+    if (!fuDate || !fuTime) return null;
+    const dt = new Date(`${fuDate}T${fuTime}`);
+    return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+  }
+
+  // Books the follow-up against an already-created treatment. Returns true on
+  // success (or when no follow-up was requested); false leaves the form up with
+  // a notice so the booking can be retried without re-recording the visit.
+  async function bookFollowUpFor(treatmentId: string): Promise<boolean> {
+    if (!(wantFollowUp && !finished)) return true;
+
+    const start = followUpStart();
+    if (!start) {
+      setNotice(
+        "Visit recorded. Pick a date and time for the follow-up, or leave it and book from the calendar later.",
+      );
+      return false;
+    }
+
+    const duration = Number(fuDuration);
+    const result = await bookAppointment({
+      patient_id: patientId,
+      treatment_id: treatmentId,
+      dentist_id: recorderId,
+      start_time: start,
+      duration_min: Number.isFinite(duration) && duration >= 5 ? duration : SLOT_MIN,
+      reason: fuReason.trim() || null,
+    });
+
+    if (result === "ok") return true;
+    if (result === "conflict") {
+      setNotice(
+        "Visit recorded. The follow-up wasn’t booked — that slot is already taken. Pick another time and try again, or book it from the calendar.",
+      );
+    } else if (result === "forbidden") {
+      setNotice("Visit recorded, but you’re not allowed to book appointments.");
+    } else {
+      setNotice(`Visit recorded, but the follow-up wasn’t booked: ${result.error}`);
+    }
+    return false;
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotice(null);
 
-    if (effectiveChoice === null) return;
+    setBusy(true);
+
+    // Retry path: the visit already saved on a previous submit and only the
+    // follow-up failed — book against the saved treatment, don't re-record.
+    if (savedTreatmentId) {
+      const booked = await bookFollowUpFor(savedTreatmentId);
+      setBusy(false);
+      if (booked) {
+        router.push(`/patients/${patientId}`);
+        router.refresh();
+      }
+      return;
+    }
+
+    if (effectiveChoice === null) {
+      setBusy(false);
+      return;
+    }
     if (isNew && !newTitle.trim()) {
+      setBusy(false);
       setError("Give the new treatment a title, e.g. “RCT tooth 36”.");
       return;
     }
@@ -127,15 +211,27 @@ export function VisitForm({ patientId }: { patientId: string }) {
       treatment_status: finished ? "completed" : "in_progress",
     } as VisitCreateBody;
 
-    setBusy(true);
+    // Write 1: the visit. This is the durable one — if the follow-up fails
+    // afterwards, the visit stays saved and we never re-record it.
     const result = await recordVisit(body);
-    setBusy(false);
-
-    const msg = messageFor(result);
-    if (msg) {
-      setError(msg);
+    if (result.status !== "ok") {
+      setBusy(false);
+      setError(recordVisitMessage(result));
       return;
     }
+
+    // Write 2: the optional follow-up, linked to the visit's treatment.
+    const treatmentId = result.visit.treatment_id;
+    const booked = await bookFollowUpFor(treatmentId);
+    setBusy(false);
+
+    if (!booked) {
+      // Visit saved; follow-up outstanding. Remember the treatment so the next
+      // submit only retries the booking.
+      setSavedTreatmentId(treatmentId);
+      return;
+    }
+
     // Back to the profile, where the new visit shows in the history.
     router.push(`/patients/${patientId}`);
     router.refresh();
@@ -344,7 +440,11 @@ export function VisitForm({ patientId }: { patientId: string }) {
                   type="checkbox"
                   className="mt-1"
                   checked={finished}
-                  onChange={(e) => setFinished(e.target.checked)}
+                  onChange={(e) => {
+                    setFinished(e.target.checked);
+                    // A completed treatment needs no follow-up.
+                    if (e.target.checked) setWantFollowUp(false);
+                  }}
                 />
                 <span>
                   <span className="font-medium">This treatment is now complete</span>
@@ -357,19 +457,110 @@ export function VisitForm({ patientId }: { patientId: string }) {
             </CardContent>
           </Card>
 
+          {/* --- inline follow-up (4.6) --- only when the treatment stays open */}
+          {!finished && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Follow-up</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={wantFollowUp}
+                    onChange={(e) => setWantFollowUp(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium">Book a follow-up appointment</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Book the next sitting now. If you skip it, this treatment
+                      will show up as needing a follow-up.
+                    </span>
+                  </span>
+                </label>
+
+                {wantFollowUp && (
+                  <div className="ml-6 flex flex-wrap items-end gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="fu-date" className="text-xs text-muted-foreground">
+                        Date
+                      </label>
+                      <input
+                        id="fu-date"
+                        type="date"
+                        value={fuDate}
+                        onChange={(e) => setFuDate(e.target.value)}
+                        className={`${controlClass} w-44`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="fu-time" className="text-xs text-muted-foreground">
+                        Time
+                      </label>
+                      <input
+                        id="fu-time"
+                        type="time"
+                        value={fuTime}
+                        onChange={(e) => setFuTime(e.target.value)}
+                        className={`${controlClass} w-32`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="fu-duration" className="text-xs text-muted-foreground">
+                        Minutes
+                      </label>
+                      <Input
+                        id="fu-duration"
+                        value={fuDuration}
+                        onChange={(e) => setFuDuration(e.target.value)}
+                        inputMode="numeric"
+                        className="w-20"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="fu-reason" className="text-xs text-muted-foreground">
+                        Reason (optional)
+                      </label>
+                      <Input
+                        id="fu-reason"
+                        value={fuReason}
+                        onChange={(e) => setFuReason(e.target.value)}
+                        placeholder="e.g. RCT tooth 36 — next sitting"
+                        className="w-72"
+                      />
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {error && <p className="text-sm text-destructive">{error}</p>}
+          {notice && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+              {notice}
+            </p>
+          )}
 
           <div className="flex items-center gap-3">
             {/* Disabled while in flight: a double-submit would record the
-                sitting twice. */}
+                sitting twice. After the visit has saved (savedTreatmentId set),
+                the button only retries the follow-up booking. */}
             <Button type="submit" disabled={busy || effectiveChoice === null}>
-              {busy ? "Recording…" : "Record visit"}
+              {busy
+                ? savedTreatmentId
+                  ? "Booking…"
+                  : "Recording…"
+                : savedTreatmentId
+                  ? "Book follow-up"
+                  : "Record visit"}
             </Button>
             <Link
               href={`/patients/${patientId}`}
               className="text-sm text-muted-foreground hover:underline"
             >
-              Cancel
+              {savedTreatmentId ? "Done — back to patient" : "Cancel"}
             </Link>
           </div>
         </form>

@@ -431,6 +431,19 @@ lifecycle change refetches both (closing a treatment changes the status shown ag
 The richer Treatments tab with visits nested under each treatment is still **4.7**; this compact
 list is its seed.
 
+**4.6** added the **inline follow-up scheduler** to the visit form (BUILD_PLAN §3: book the next
+sitting in the same flow, not a separate trip to the calendar). It's optional and off by default, and
+hidden when the visit marks the treatment complete. The important part is the sequencing: recording a
+visit and booking a follow-up are **two separate writes** (`POST /visits`, then `POST /appointments`
+linked via `treatment_id`), because 4.3 deliberately kept booking out of the visit endpoint. The
+**visit is the durable one** — if the booking fails (e.g. the slot is taken, a 409 from
+`appointment_no_overlap`), the visit stays saved and the form retries only the booking, so a clashing
+follow-up never costs the clinical record. To make that possible, `recordVisit` now returns the
+created visit (a first visit's `treatment_id` is server-assigned, so the client only learns it from
+the response). This is also the **first appointment-create path from the browser** — `POST
+/appointments` has existed since 3.2, but until now the calendar only rescheduled; `lib/use-appointments.ts`
+holds the new `bookAppointment` helper. The follow-up's dentist defaults to the recorder.
+
 ### Treatment catalogue + the first role split (step 4.1)
 
 `treatment_item` is the small "name + default price" list BUILD_PLAN §1 kept when the rate-card
