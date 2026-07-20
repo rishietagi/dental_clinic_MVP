@@ -24,3 +24,4 @@ from app.models.treatment_item import TreatmentItem  # noqa: E402,F401
 from app.models.treatment import Treatment  # noqa: E402,F401
 from app.models.visit import Visit  # noqa: E402,F401
 from app.models.procedure_performed import ProcedurePerformed  # noqa: E402,F401
+from app.models.clinic_settings import ClinicSettings  # noqa: E402,F401

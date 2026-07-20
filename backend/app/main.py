@@ -7,6 +7,7 @@ from app.config import settings
 from app.routers import (
     appointments,
     auth,
+    clinic_settings,
     patients,
     treatment_items,
     treatments,
@@ -24,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(clinic_settings.router)
 app.include_router(patients.router)
 app.include_router(appointments.router)
 app.include_router(treatment_items.router)

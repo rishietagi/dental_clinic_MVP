@@ -17,16 +17,9 @@ import {
   statusStyle,
   type Status,
 } from "@/lib/appointment-status";
+import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useDayAppointments, type AppointmentListItem } from "@/lib/use-day-appointments";
-
-// A date as YYYY-MM-DD in the *browser's* local zone (what the date input uses).
-function todayIso(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+import { fmtTimeInZone, todayIso } from "@/lib/week";
 
 // Step a YYYY-MM-DD string by whole days (parsed as local noon to dodge DST edges).
 function addDays(iso: string, days: number): string {
@@ -38,13 +31,10 @@ function addDays(iso: string, days: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-// HH:MM–HH:MM in the browser's locale, from an ISO start + a minute duration.
-function timeRange(startIso: string, durationMin: number): string {
-  const start = new Date(startIso);
-  const end = new Date(start.getTime() + durationMin * 60_000);
-  const fmt = (dt: Date) =>
-    dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${fmt(start)}–${fmt(end)}`;
+// HH:MM–HH:MM in the CLINIC zone, from an ISO start + a minute duration.
+function timeRange(startIso: string, durationMin: number, tz: string): string {
+  const endIso = new Date(new Date(startIso).getTime() + durationMin * 60_000).toISOString();
+  return `${fmtTimeInZone(startIso, tz)}–${fmtTimeInZone(endIso, tz)}`;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -102,7 +92,9 @@ function StatusActions({
 }
 
 export function DayView() {
-  const [date, setDate] = useState<string>(todayIso());
+  const { settings } = useClinicSettings();
+  const tz = settings.timezone;
+  const [date, setDate] = useState<string>(() => todayIso(tz));
   const state = useDayAppointments(date);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -112,7 +104,7 @@ export function DayView() {
         <Button variant="outline" size="sm" onClick={() => setDate(addDays(date, -1))}>
           ← Prev
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setDate(todayIso())}>
+        <Button variant="outline" size="sm" onClick={() => setDate(todayIso(tz))}>
           Today
         </Button>
         <Button variant="outline" size="sm" onClick={() => setDate(addDays(date, 1))}>
@@ -121,7 +113,7 @@ export function DayView() {
         <input
           type="date"
           value={date}
-          onChange={(e) => setDate(e.target.value || todayIso())}
+          onChange={(e) => setDate(e.target.value || todayIso(tz))}
           aria-label="Pick a date"
           className="ml-1 rounded-md border bg-background px-2 py-1 text-sm"
         />
@@ -167,7 +159,7 @@ export function DayView() {
                   {state.data.items.map((a: AppointmentListItem) => (
                     <tr key={a.id} className="border-b last:border-0">
                       <td className="whitespace-nowrap px-3 py-2 tabular-nums">
-                        {timeRange(a.start_time, a.duration_min)}
+                        {timeRange(a.start_time, a.duration_min, tz)}
                       </td>
                       <td className="px-3 py-2">
                         <Link

@@ -17,7 +17,7 @@ Appointment ids travel as PATH params; the day filter is a query DATE (not a
 patient identifier), which the no-id-in-URL rule permits.
 """
 
-from datetime import date, datetime, time, timezone
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_staff
 from app.db import get_db
 from app.models.appointment import Appointment
+from app.models.clinic_settings import ClinicSettings
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 from app.schemas.appointment import (
@@ -41,10 +42,22 @@ from app.schemas.appointment import (
 )
 from app.services.appointments import can_transition, find_conflicts
 from app.services.audit import record_audit
+from app.services.clinic import clinic_day_bounds
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
 
 _OVERLAP_DETAIL = "This time slot overlaps an existing appointment."
+
+
+def _clinic_timezone(db: Session) -> str:
+    """The clinic's IANA timezone from settings, falling back to UTC.
+
+    The migration seeds the settings row, so the fallback only matters in the
+    theoretical case it's missing — better a UTC-bounded day than a 500 on a
+    read.
+    """
+    settings = db.get(ClinicSettings, 1)
+    return settings.timezone if settings is not None else "UTC"
 
 
 def _get_or_404(db: Session, appointment_id: UUID) -> Appointment:
@@ -145,8 +158,13 @@ def list_appointments(
             detail="Pass either `date` or both `from` and `to`.",
         )
 
-    day_start = datetime.combine(range_start, time.min, tzinfo=timezone.utc)
-    day_end = datetime.combine(range_end, time.max, tzinfo=timezone.utc)
+    # "A day" is a CLINIC-local day, not a UTC day. Read the clinic timezone and
+    # bound the range in it (4.9). For an IST clinic, 2 Aug means 2 Aug 00:00 IST
+    # → 2 Aug 23:59 IST, i.e. 1 Aug 18:30 UTC → 2 Aug 18:29 UTC — so evening IST
+    # appointments (previous UTC day) are correctly included.
+    tz_name = _clinic_timezone(db)
+    day_start, _ = clinic_day_bounds(range_start, tz_name)
+    _, day_end = clinic_day_bounds(range_end, tz_name)
 
     # Join the patient (always present) and the dentist (nullable → outerjoin) so
     # each row carries the names the calendar needs — one query, no N+1.

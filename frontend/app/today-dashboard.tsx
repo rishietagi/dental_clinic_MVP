@@ -10,16 +10,14 @@
 import Link from "next/link";
 
 import { statusLabel, statusStyle, STATUSES } from "@/lib/appointment-status";
+import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useDayAppointments, type AppointmentListItem } from "@/lib/use-day-appointments";
-import { todayIso } from "@/lib/week";
+import { fmtTimeInZone, todayIso } from "@/lib/week";
 
-// HH:MM–HH:MM in the browser's locale, from an ISO start + a minute duration.
-function timeRange(startIso: string, durationMin: number): string {
-  const start = new Date(startIso);
-  const end = new Date(start.getTime() + durationMin * 60_000);
-  const fmt = (dt: Date) =>
-    dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${fmt(start)}–${fmt(end)}`;
+// HH:MM–HH:MM in the CLINIC zone, from an ISO start + a minute duration.
+function timeRange(startIso: string, durationMin: number, tz: string): string {
+  const endIso = new Date(new Date(startIso).getTime() + durationMin * 60_000).toISOString();
+  return `${fmtTimeInZone(startIso, tz)}–${fmtTimeInZone(endIso, tz)}`;
 }
 
 function SummaryTile({
@@ -40,7 +38,9 @@ function SummaryTile({
 }
 
 export function TodayDashboard() {
-  const today = todayIso();
+  const { settings } = useClinicSettings();
+  const tz = settings.timezone;
+  const today = todayIso(tz);
   const state = useDayAppointments(today);
 
   const items: AppointmentListItem[] = state.kind === "ready" ? state.data.items : [];
@@ -101,7 +101,7 @@ export function TodayDashboard() {
                   {items.map((a) => (
                     <tr key={a.id} className="border-b last:border-0">
                       <td className="whitespace-nowrap px-3 py-2 tabular-nums">
-                        {timeRange(a.start_time, a.duration_min)}
+                        {timeRange(a.start_time, a.duration_min, tz)}
                       </td>
                       <td className="px-3 py-2">
                         <Link

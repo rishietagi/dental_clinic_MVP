@@ -26,11 +26,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { bookAppointment } from "@/lib/use-appointments";
+import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { usePatient } from "@/lib/use-patient";
 import { formatPrice, useTreatmentItems } from "@/lib/use-treatment-items";
 import { usePatientTreatments, type Treatment } from "@/lib/use-treatments";
-import { SLOT_MIN } from "@/lib/week";
 import {
   recordVisit,
   type ProcedureInput,
@@ -63,6 +63,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
   const staffState = useCurrentStaff();
   const treatmentsState = usePatientTreatments(patientId, { openOnly: true });
   const itemsState = useTreatmentItems(false); // active catalogue items only
+  const { settings } = useClinicSettings();
+  const slotMinutes = settings.slot_minutes;
 
   // Which treatment this sitting belongs to: an existing id, or "new".
   const [choice, setChoice] = useState<string | null>(null);
@@ -79,7 +81,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
   const [wantFollowUp, setWantFollowUp] = useState(false);
   const [fuDate, setFuDate] = useState("");
   const [fuTime, setFuTime] = useState("");
-  const [fuDuration, setFuDuration] = useState(String(SLOT_MIN));
+  // Blank = use the clinic's configured slot length (shown as the placeholder).
+  const [fuDuration, setFuDuration] = useState("");
   const [fuReason, setFuReason] = useState("");
 
   const [busy, setBusy] = useState(false);
@@ -140,13 +143,14 @@ export function VisitForm({ patientId }: { patientId: string }) {
       return false;
     }
 
-    const duration = Number(fuDuration);
+    const typed = Number(fuDuration);
     const result = await bookAppointment({
       patient_id: patientId,
       treatment_id: treatmentId,
       dentist_id: recorderId,
       start_time: start,
-      duration_min: Number.isFinite(duration) && duration >= 5 ? duration : SLOT_MIN,
+      // Blank or invalid → the clinic's configured slot length.
+      duration_min: fuDuration.trim() && Number.isFinite(typed) && typed >= 5 ? typed : slotMinutes,
       reason: fuReason.trim() || null,
     });
 
@@ -515,6 +519,7 @@ export function VisitForm({ patientId }: { patientId: string }) {
                         value={fuDuration}
                         onChange={(e) => setFuDuration(e.target.value)}
                         inputMode="numeric"
+                        placeholder={String(slotMinutes)}
                         className="w-20"
                       />
                     </div>

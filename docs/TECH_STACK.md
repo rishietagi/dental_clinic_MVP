@@ -76,6 +76,7 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 | Choice | Version | Why |
 |---|---|---|
 | @dnd-kit/core | ^6.3.1 | Pointer-based drag-and-drop for the week-view calendar's drag-drop reschedule (step 3.4). Modular + React-19-compatible; `core` alone (no `/sortable` or `/modifiers`) — snapping comes from discrete droppable (day, slot) cells. Pulls `@dnd-kit/accessibility` + `@dnd-kit/utilities`. |
+| date-fns + date-fns-tz | ^4.4.0 / ^3.2.0 | Clinic-timezone handling (step 4.9): `formatInTimeZone` / `toZonedTime` / `fromZonedTime` render times and compute (day, slot) in the clinic's IANA zone instead of the browser's local zone. `date-fns-tz` needs `date-fns` as its peer. Chosen over browser `Intl` for robust zone/offset math; the **backend** does the equivalent with stdlib `zoneinfo` (no backend dep). |
 
 ## Backend
 

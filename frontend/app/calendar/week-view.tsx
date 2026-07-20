@@ -2,13 +2,13 @@
 
 // The week-view calendar with drag-drop reschedule (3.4).
 //
-// A time grid: rows are 30-min slots (09:00–17:30), columns are the 7 days of the
-// week. Appointments render as draggable cards in their (day, slot) cell; each
-// cell is a drop target. Dropping a card PATCHes its start_time to that day+slot.
-// A same-dentist overlap comes back 409 and is shown inline (the card stays put).
+// A time grid: rows are slots from the configured clinic hours, columns are the 7
+// days of the week. Appointments render as draggable cards in their (day, slot)
+// cell; each cell is a drop target. Dropping a card PATCHes its start_time to that
+// day+slot. A same-dentist overlap comes back 409 and is shown inline.
 //
-// Clinic hours + slot size are hardcoded (lib/week.ts) until Phase 4 clinic
-// settings. Times are the browser's local zone (see the LOG timezone caveat).
+// Hours/slot size come from clinic settings (4.9), and all day/slot math is done
+// in the CLINIC's timezone so cards land correctly regardless of the viewer zone.
 
 import {
   DndContext,
@@ -26,6 +26,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { statusLabel, statusStyle } from "@/lib/appointment-status";
+import { useClinicSettings } from "@/lib/use-clinic-settings";
 import type { AppointmentListItem } from "@/lib/use-day-appointments";
 import {
   useWeekAppointments,
@@ -34,12 +35,13 @@ import {
 import {
   addWeeks,
   cellId,
+  clinicDay,
   daySlots,
   fmtDayHeader,
   fmtSlot,
   parseCellId,
-  slotDate,
   slotForStart,
+  slotInstant,
   startOfWeek,
   todayIso,
   weekDays,
@@ -107,7 +109,12 @@ function Cell({
 // ---- the week view ----------------------------------------------------------
 
 export function WeekView() {
-  const [weekStart, setWeekStart] = useState<string>(startOfWeek(todayIso()));
+  const { settings } = useClinicSettings();
+  const { open_hour, close_hour, slot_minutes, timezone } = settings;
+
+  const [weekStart, setWeekStart] = useState<string>(() =>
+    startOfWeek(todayIso(timezone)),
+  );
   const state = useWeekAppointments(weekStart);
   const [dragging, setDragging] = useState<AppointmentListItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -119,7 +126,7 @@ export function WeekView() {
   );
 
   const days = weekDays(weekStart);
-  const slots = daySlots();
+  const slots = daySlots(open_hour, close_hour, slot_minutes);
 
   function onDragStart(event: DragStartEvent) {
     setNotice(null);
@@ -132,12 +139,12 @@ export function WeekView() {
     if (!appt || !event.over) return;
 
     const { dayIso, slot } = parseCellId(String(event.over.id));
-    const newStart = slotDate(dayIso, slot);
+    const newStartIso = slotInstant(dayIso, slot, timezone);
 
     // No-op if dropped on its current slot.
-    if (new Date(appt.start_time).getTime() === newStart.getTime()) return;
+    if (new Date(appt.start_time).getTime() === new Date(newStartIso).getTime()) return;
 
-    const result = await rescheduleAppointment(appt.id, newStart.toISOString());
+    const result = await rescheduleAppointment(appt.id, newStartIso);
     if (result === "ok") {
       if ("refetch" in state) state.refetch();
     } else if (result === "conflict") {
@@ -153,7 +160,7 @@ export function WeekView() {
         <Button variant="outline" size="sm" onClick={() => setWeekStart(addWeeks(weekStart, -1))}>
           ← Prev
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setWeekStart(startOfWeek(todayIso()))}>
+        <Button variant="outline" size="sm" onClick={() => setWeekStart(startOfWeek(todayIso(timezone)))}>
           This week
         </Button>
         <Button variant="outline" size="sm" onClick={() => setWeekStart(addWeeks(weekStart, 1))}>
@@ -201,12 +208,14 @@ export function WeekView() {
                   </div>
                   {days.map((d) => {
                     const cardsHere = state.data.items.filter((a) => {
-                      const s = slotForStart(a.start_time);
+                      const s = slotForStart(
+                        a.start_time, timezone, open_hour, close_hour, slot_minutes,
+                      );
                       return (
                         s !== null &&
                         s.hour === slot.hour &&
                         s.minute === slot.minute &&
-                        localDay(a.start_time) === d
+                        clinicDay(a.start_time, timezone) === d
                       );
                     });
                     return (
@@ -230,7 +239,8 @@ export function WeekView() {
 
       <p className="text-xs text-muted-foreground">
         Drag an appointment to another slot to reschedule. Showing{" "}
-        {fmtSlot(slots[0])}–18:00, {slots.length} slots/day.
+        {fmtSlot(slots[0])}–{String(close_hour).padStart(2, "0")}:00, {slots.length}{" "}
+        slots/day ({timezone}).
       </p>
 
       {/* Patient links live in the day view; keep the week grid drag-focused. */}
@@ -243,15 +253,6 @@ export function WeekView() {
 // fragment (keeps the map readable without wrapping divs that would break the grid).
 function FragmentRow({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
-}
-
-// The local-zone day (YYYY-MM-DD) an ISO timestamp falls on.
-function localDay(startIso: string): string {
-  const dt = new Date(startIso);
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, "0");
-  const d = String(dt.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
 }
 
 // A compact list of the week's patients linking to their profiles — the grid

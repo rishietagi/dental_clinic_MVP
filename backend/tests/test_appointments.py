@@ -22,6 +22,7 @@ from app.db import SessionLocal
 from app.main import app
 from app.models.appointment import Appointment
 from app.models.audit_log import AuditLog
+from app.models.clinic_settings import ClinicSettings
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 
@@ -84,12 +85,24 @@ def as_staff(db_available):
     db.add(staff)
     db.commit()
 
+    # Pin the clinic timezone to UTC for these tests: the day/range assertions
+    # below use UTC-based times, so a "day" must mean a UTC day here. The IST
+    # behaviour is tested separately (test_day_bounds_use_clinic_timezone). The
+    # original zone is restored afterwards.
+    _settings = db.get(ClinicSettings, 1)
+    _saved_tz = _settings.timezone
+    _settings.timezone = "UTC"
+    db.commit()
+
     app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
 
     try:
         yield client, staff.id
     finally:
         app.dependency_overrides.clear()
+        _settings = db.get(ClinicSettings, 1)
+        _settings.timezone = _saved_tz
+        db.commit()
         for aid in _appt_ids:
             obj = db.get(Appointment, aid)
             if obj is not None:
@@ -360,6 +373,47 @@ def test_list_by_day(as_staff):
     assert body["total"] == 2
     times = [item["start_time"] for item in body["items"]]
     assert times == sorted(times)  # ordered by start_time
+
+
+def test_day_bounds_use_clinic_timezone(as_staff):
+    """The 4.9 fix: 'a day' is a CLINIC day, not a UTC day.
+
+    An appointment at 2026-08-01 19:30 UTC is 2026-08-02 01:00 in IST. With the
+    clinic in Asia/Kolkata it must appear in the 2026-08-02 day query — even
+    though its UTC date is the 1st. Under the old UTC-day bounds it would have
+    been missed. Also confirm it does NOT show up on 2026-08-01 (its UTC date).
+    """
+    client, _ = as_staff
+    pid = _make_patient()
+
+    # Switch the clinic to IST for this test (the fixture pinned UTC).
+    db = SessionLocal()
+    try:
+        s = db.get(ClinicSettings, 1)
+        saved = s.timezone
+        s.timezone = "Asia/Kolkata"
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        # 2026-08-01 19:30 UTC == 2026-08-02 01:00 IST (unassigned → no conflict).
+        early_ist = datetime(2026, 8, 1, 19, 30, tzinfo=timezone.utc)
+        _book(client, patient_id=str(pid), start_time=_iso(early_ist))
+
+        on_2nd = client.get("/appointments", params={"date": "2026-08-02"}).json()
+        assert on_2nd["total"] == 1, "IST evening/early appt should fall on the clinic day"
+
+        on_1st = client.get("/appointments", params={"date": "2026-08-01"}).json()
+        assert on_1st["total"] == 0, "must not appear on its UTC date under IST bounds"
+    finally:
+        db = SessionLocal()
+        try:
+            s = db.get(ClinicSettings, 1)
+            s.timezone = saved
+            db.commit()
+        finally:
+            db.close()
 
 
 def test_list_items_carry_names(as_staff):

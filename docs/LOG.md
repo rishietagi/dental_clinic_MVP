@@ -40,16 +40,21 @@ PHASE 4'S FEATURE WORK IS COMPLETE:** the dashboard flags **open treatments with
 unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
 `app.seed_patients` (dev patients). **130 backend tests pass.**
 
-**What remains in Phase 4 is NOT feature work** — only the two carried-forward infra items below
-(clinic settings, clinic timezone). Decide with the user whether to close those out before starting
-Phase 5 (billing), or carry them forward.
+**Step 4.9 is done — PHASE 4 IS FULLY COMPLETE (features + infra).** The Phase-4 wrap added
+**clinic settings** (a singleton `clinic_settings` row: hours, slot size, timezone; migration
+`1c72084fac9c`, the **ninth**) and **actually applied the clinic timezone**: the appointments
+day/range query now bounds "a day" in the **clinic zone** (`clinic_day_bounds`), not UTC, and the
+calendar/dashboard render times in the clinic zone. `GET/PATCH /clinic-settings` (admin-write),
+`/settings/clinic` screen, `useClinicSettings` hook. **New frontend deps: `date-fns` + `date-fns-tz`**
+(backend uses stdlib `zoneinfo`). **The UTC-everywhere caveat carried since 3.3 is retired.** Migration
+head = **`1c72084fac9c`**; **nine models**. **143 backend tests pass.** Next is **Phase 5 (billing)**.
 
-**OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
+**OPEN ITEMS** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
 |---|---|---|
-| **Clinic hours + slot size hardcoded** | Week view assumes 09:00–17:30 / 30-min slots. Should come from clinic settings. | `frontend/lib/week.ts` (`DAY_START_HOUR`, `DAY_END_HOUR`, `SLOT_MIN`) |
-| **No clinic timezone** | "Today"/day bounds are UTC on the API and browser-local in the UI. Clinic is IST. Needs a clinic-timezone setting. | `routers/appointments.py` day bounds; `lib/week.ts`, `today-dashboard.tsx` |
-| **No appointment seed script** | Only `app.seed` (admin) + `app.seed_patients` exist. Demo appointments have been created ad hoc. | `backend/app/` |
+| ~~Clinic hours + slot size hardcoded~~ | **DONE in 4.9** — from `clinic_settings` via `useClinicSettings`; `week.ts` constants are now just fallbacks. | — |
+| ~~No clinic timezone~~ | **DONE in 4.9** — day bounds are clinic-zone (`clinic_day_bounds`), UI renders in the clinic zone via `date-fns-tz`. | — |
+| **No appointment seed script** | Only `app.seed` (admin) + `app.seed_patients` exist. Demo appointments have been created ad hoc. Would help exercise the calendar/dashboard with data. | `backend/app/` |
 | **Price snapshot question (→ 5.2)** | `procedure_performed` has **no price column**. 5.2 must decide whether an invoice line snapshots the price at the time of the procedure, so re-reading an old visit doesn't show today's price. Raised in 4.2, answered in Phase 5. | `backend/app/models/procedure_performed.py` |
 
 **Treatment catalogue (4.1):** `treatment_item` = flat `name` (unique) + `default_price` + `active`.
@@ -213,6 +218,8 @@ the original step instructions say otherwise:
 | **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **Clinic settings = a single-row table (`id = 1` CHECK)** | — | One clinic, so `clinic_settings` is a singleton: `id` pinned to 1 by a CHECK, seeded by the migration, read/written as `db.get(ClinicSettings, 1)`. No create/delete. Plus CHECKs for sane hours (`close > open`) and positive slot. The migration hand-adds the CHECKs + the seed `INSERT` (autogenerate emits neither). | `backend/app/models/clinic_settings.py`, `backend/alembic/versions/1c72084fac9c_*.py` |
+| **"A day" is a CLINIC-zone day (`clinic_day_bounds`)** | 3.3 caveat: UTC-everywhere | 4.9 retired the UTC-day caveat. `list_appointments` bounds day/range in the clinic's IANA zone via `services/clinic.clinic_day_bounds` (stdlib `zoneinfo`), so an IST-evening appointment (previous UTC date) lands on the right clinic day. The frontend renders times + resolves "today" in the clinic zone via `date-fns-tz` (`formatInTimeZone`, `toZonedTime`, `fromZonedTime`) instead of browser-local. The overlap constraint/`find_conflicts` are unaffected — they compare instants. | `backend/app/services/clinic.py`, `backend/app/routers/appointments.py`, `frontend/lib/week.ts` |
 | **Literal routes before `/{id}` routes** | — | `GET /treatments/needs-follow-up` (4.8) MUST be declared **before** `GET /{treatment_id}`, or FastAPI matches "needs-follow-up" as a `{treatment_id}` UUID path param and 422s. A test (`test_needs_follow_up_not_shadowed_by_id_route`) pins it. Applies to any future literal sub-path on a router that also has a `/{id}` route. | `backend/app/routers/treatments.py` |
 | **"No next appointment" = no FUTURE non-cancelled appt, not zero appts** | — | 4.8's report flags an `in_progress` treatment unless it has an appointment (linked by `treatment_id`) that is **upcoming AND not cancelled**. A *past* sitting or a *cancelled* future booking does NOT cover it — those are exactly the walk-out cases. "Future" is measured in **UTC** (`now()`), consistent with the app's UTC-everywhere time (clinic-timezone caveat from 3.3 still applies). | `backend/app/routers/treatments.py` |
 | **Inline follow-up = two sequential writes; the visit is the durable one** | — | 4.6 books the follow-up by `POST /visits` **then** `POST /appointments` — NOT one combined endpoint (4.3 deliberately kept booking out of the visit route). If the booking fails (e.g. slot-taken 409) after the visit saved, **the visit is never lost**: the form keeps the created `treatment_id` in state (`savedTreatmentId`) and the next submit only retries the booking. So `recordVisit` now **returns the created visit** (`RecordVisitResult`, not a bare `"ok"`) — a first visit auto-creates its treatment server-side, so the client needs the response to get the id. Any future caller that needs the visit body relies on this. | `frontend/lib/use-visits.ts`, `frontend/app/patients/[id]/visits/new/visit-form.tsx` |
@@ -241,6 +248,100 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 4.9: Phase 4 wrap — clinic settings + clinic timezone
+
+**Status:** complete — a singleton settings table + migration, a role-split settings API, the
+timezone day-bounds fix, and the frontend threading, verified (143 backend tests pass; migration
+applies + reverses + reseeds; lint + build + Docker images green; settings API and the tz fix proven
+live; Caddy guards checked). For commit. **PHASE 4 IS NOW FULLY COMPLETE.**
+
+### Why this step
+The two infra caveats carried since Phase 3 — hardcoded clinic hours/slot (`lib/week.ts`) and no
+clinic timezone (UTC-everywhere) — needed closing before Phase 5's billing dates make the timezone
+load-bearing. The user chose to do both now.
+
+### Scope decisions (confirmed with user)
+- **Single-row `clinic_settings` table** (`id = 1` CHECK), seeded by the migration
+  (09:00–18:00 / 30-min / `Asia/Kolkata`). `GET` any staff, `PATCH` admin-only, audited.
+- **Timezone actually applied** — day bounds computed in the clinic zone; UI renders in it.
+- **`useClinicSettings` hook** feeds the calendar grid, the dashboard, and the visit form.
+- **New frontend dep `date-fns-tz`** (+ `date-fns` peer), user-approved after I flagged it. Backend
+  uses stdlib `zoneinfo` — no backend dep.
+
+### Built — backend
+- `app/models/clinic_settings.py` — `ClinicSettings` singleton (`id=1`, hours, `slot_minutes`,
+  `timezone`, `updated_at`).
+- `alembic/versions/1c72084fac9c_add_clinic_settings.py` — **ninth migration**, `down_revision =
+  999215bea700`. Hand-added the three CHECKs (`id=1`, hours `close>open`, `slot>0`) and the seed
+  `INSERT` (autogenerate emits neither). Applies, reverses, and **reseeds** on re-upgrade — verified.
+- `app/schemas/clinic_settings.py` — Read + Update; `timezone` validated as a real IANA zone
+  (constructing `ZoneInfo`) → 422 on a typo.
+- `app/routers/clinic_settings.py` — `GET` (`get_current_staff`) + `PATCH` (`require_role("admin")`,
+  audited `entity="clinic_settings"`); cross-field `close>open` re-checked on the merged row.
+- `app/services/clinic.py` — **fifth `services/` module.** `clinic_day_bounds(day, tz)` → the UTC
+  window of a clinic-local calendar day. `list_appointments` now uses it instead of
+  `datetime.combine(..., tzinfo=utc)`.
+- Tests: `test_clinic_settings.py` (GET defaults, admin PATCH, **receptionist 403**, invalid tz 422,
+  `close<=open` 422, out-of-range 422, audit), `test_clinic.py` (`clinic_day_bounds` IST/UTC offset
+  math, pure-logic), and `test_appointments.py::test_day_bounds_use_clinic_timezone` (**the bug**: an
+  appt at `1 Aug 19:30 UTC` = `2 Aug 01:00 IST` shows on the 2 Aug clinic day, not 1 Aug). The
+  appointments fixture now pins the clinic tz to UTC so the existing UTC-based day/range tests stay
+  valid, restoring it after. 130 → **143**.
+
+### Built — frontend
+- `package.json` — `date-fns` + `date-fns-tz` added.
+- `lib/use-clinic-settings.ts` — `useClinicSettings()` (returns the settings with the old hardcoded
+  values as the **loading fallback**, so no grid renders empty) + `updateClinicSettings`.
+- `lib/week.ts` — the constants became defaults; `daySlots`/`slotForStart`/`todayIso` take
+  settings/tz params; **new** `clinicDay`, `slotInstant`, `fmtTimeInZone` do day/slot/time math in the
+  clinic zone via `date-fns-tz` (was browser-local `getHours()`/`new Date(y,m,d)`).
+- `app/calendar/{week,day}-view.tsx`, `app/today-dashboard.tsx` — read the hook; grid rows from
+  configured hours/slot; times/"today" in the clinic zone.
+- `app/patients/[id]/visits/new/visit-form.tsx` — follow-up duration defaults to `slot_minutes`
+  (placeholder-driven; blank = configured slot).
+- `app/settings/clinic/` (page + `clinic-settings-form.tsx`) — admin edits hours/slot/tz; non-admins
+  read-only. `app/role-nav.tsx` — new admin **Clinic settings** link.
+
+### Bug hit + fixed during build (worth remembering)
+1. **Seeded row got permanently drifted** by an early failed test run whose snapshot-based restore
+   captured an already-mutated value. Fixed by making the settings fixture restore to **fixed seed
+   defaults** (not a snapshot), so a mid-test failure is self-healing; reset the DB row by hand once.
+2. **`react-hooks/set-state-in-effect`** on the settings form (seeding the edit draft from the loaded
+   settings in a `useEffect`). Fixed with the **"adjust state during render"** idiom (a key compare,
+   no effect) — the same rule that bit 0.3/2.3/2.4.
+
+### No new backend dep / migration is the only schema change
+`zoneinfo` is stdlib on 3.12. One migration (the ninth).
+
+### Verified
+- Migration: `\d clinic_settings` shows the 3 CHECKs + the seeded row; **reversible + reseeds**.
+- **143 backend tests pass** in-container.
+- Frontend `lint` + `build` green; `/settings/clinic` registered; **Docker frontend image rebuilds
+  with the new deps** (`npm ci`).
+- **Live:** GET defaults; admin PATCH sticks; **receptionist PATCH 403**; invalid tz/hours 422; and
+  the headline — **the same appointment instant falls on 2 Aug under an IST clinic and 1 Aug under a
+  UTC clinic** (the zone drives the day). Audit rows written. Settings restored after.
+- **Through Caddy:** `/api/clinic-settings` no token → 401; `/settings/clinic` signed-out → 307 →
+  /login.
+
+### What was NOT browser-clicked (honest note)
+The tz day-bounds math and the settings API are proven live. The **calendar/dashboard rendering in
+the clinic zone and the settings form** are wired + type-checked (build passes) but not clicked in a
+browser; auth was faked for the live run. **Handed to the user for the visual click-through** —
+especially: change the timezone in `/settings/clinic` and confirm the calendar times shift, and edit
+the hours and confirm the week grid's rows change.
+
+### PHASE 4 COMPLETE
+The clinical core end to end: treatment catalogue, the treatment/visit/procedure models, visit
+recording with auto-created treatments, the visit screen, treatment lifecycle, inline follow-ups, the
+nested treatment history, the open-treatments dashboard, and now configurable clinic settings + a
+real timezone. Next: **Phase 5 — billing** (invoices per visit, payments, today's collections).
+
+### Suggested commit
+`feat: add clinic settings and timezone`
 
 ---
 
