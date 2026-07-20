@@ -22,9 +22,10 @@ view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 o
 **Step 4.1 is done:** the **treatment catalogue** (`treatment_item` + admin Settings CRUD, migration
 `73aeddd50693`). **Step 4.2 is done:** the **clinical core models** — `treatment` + `visit` +
 `procedure_performed`, and **`appointment.treatment_id` finally got its real FK** (migration
-`999215bea700`). **Next is step 4.3** — the visit recording API (auto-creates a treatment if new).
-Now **eight migrations** (head = `999215bea700`) and **eight models**. Two seed scripts: `app.seed`
-(admin) and `app.seed_patients` (dev patients).
+`999215bea700`). **Step 4.3 is done:** the **visit recording API** (`POST /visits` auto-creates and
+auto-closes treatments; the project's **second role-split resource**). **Next is step 4.4** — the
+visit record screen. Now **eight migrations** (head = `999215bea700`, unchanged by 4.3) and **eight
+models**. Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
 
 **OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -85,6 +86,21 @@ sees the concept), `patient_id` NOT NULL and deliberately denormalised, `appoint
 (walk-ins), `dentist_id` nullable. `procedure_performed` = `visit_id` + `treatment_item_id` + nullable
 `tooth_ref`, **no price column** (open question for 5.2). No `relationship()` navigations on any of
 them yet. No endpoints — that's 4.3.
+
+**Visit recording (4.3):** **`POST /visits` takes EITHER `treatment_id` (continue a thread) OR a
+`treatment` stub `{title, tooth_ref}` (start one) — exactly one, else 422.** `treatment_status`
+(`in_progress` | `completed`, `Literal` → 422 for anything else) decides whether the treatment is
+closed **in the same request**: that's the auto-close half of the rule, and it's what stops a one-off
+cleaning lingering on 4.8's open-treatments report. **Writes = `require_role("dentist","admin")`,
+reads = any active staff** (BUILD_PLAN §2: clinical recording is the dentist's; the receptionist
+still needs history for billing). Endpoints: `POST /visits`, `GET /visits/{id}`,
+`GET /visits?patient_id=` **or** `?treatment_id=` (exactly one, else 422), `PATCH /visits/{id}`
+(notes/complaint/date only — **cannot re-thread** a visit). One request = one transaction: treatment
++ visit + procedures + audit commit together, and unknown `treatment_item_id`s are rejected **before
+anything is written** (404, not a 500 from the FK). `dentist_id` defaults to whoever recorded it.
+Auto-created treatments get their own audit row (`details.auto_created_by_visit = true`). The rule
+lives in `services/visits.py` (`resolve_treatment`), which raises domain exceptions, not
+`HTTPException`, so the router owns status codes and 4.6 can reuse it.
 
 **Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
 `dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` →
@@ -166,6 +182,9 @@ the original step instructions say otherwise:
 | **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
 | **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
 | **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **`POST /visits` auto-create/auto-close contract** | Roadmap says only "auto-creates treatment if new" | The request carries **exactly one** of `treatment_id` / `treatment` stub (else 422), plus `treatment_status`. `completed` sets `status` **and** `closed_at` in the same transaction — so a single-visit cleaning is one call that leaves nothing open (BUILD_PLAN §3). Auto-close is **explicit on the request**, never inferred from which procedures were performed. **4.4 (screen) and 4.6 (inline follow-up) both depend on this exact shape** — don't change it without updating them. | `backend/app/services/visits.py`, `backend/app/routers/visits.py` |
+| **Second role-split resource: visits are dentist-write** | Phases 2–3 let any active staff do everything | Visit writes are `require_role("dentist","admin")`; reads stay `get_current_staff`. BUILD_PLAN §2 gives "record visits/treatments" to the Dentist — clinical notes are the dentist's record — while the receptionist still needs visit history for billing (5.2) and follow-ups. A test asserts a receptionist gets **403** on POST/PATCH but **200** on GET. | `backend/app/routers/visits.py` |
+| **Services raise domain exceptions, not HTTPException** | — | `services/visits.py` raises `TreatmentNotFound` / `TreatmentPatientMismatch` / `TreatmentAlreadyClosed`; the router maps them to 404/409/409. Keeps the rule unit-testable without HTTP and leaves status codes in one place. Follow this for future service modules. | `backend/app/services/visits.py` |
 | **Autogenerated FK constraints need a name by hand** | — | `op.create_foreign_key(None, ...)` upgrades fine (Postgres invents a name) but the paired `op.drop_constraint(None, ...)` **cannot drop an unnamed constraint** — the downgrade fails and the migration is silently irreversible. Hit in `999215bea700`; fixed by naming it `appointment_treatment_id_fkey`. **Always test the downgrade.** | `backend/alembic/versions/999215bea700_*.py` |
 | **Money is `Numeric`, NEVER float** | — | `treatment_item.default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in Python/Pydantic — the project's first money column (4.1). Binary floating point can't represent decimal currency exactly, and a rounding error in an invoice is a real bug. **Phase 5's invoice/payment columns must follow the same rule.** Prices cross the wire as strings so the exact decimal survives; the frontend formats with `Intl.NumberFormat` and never does float arithmetic on them. | `backend/app/models/treatment_item.py` |
 | **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
@@ -185,6 +204,84 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.3: visit recording API
+
+**Status:** complete — schemas + service + router + tests, verified against the real Docker Postgres
+(104 tests pass; the full RCT thread, the auto-close case, the role split and the transactional
+guarantee all proven live). For commit. **No migration** — 4.2 created every table this writes to.
+**The app now holds real clinical content**, and this is the **second role-split resource**.
+
+### Scope decisions (confirmed with user)
+- **One endpoint, `treatment_id` optional.** `POST /visits` takes **either** `treatment_id`
+  (continue a thread) **or** a `treatment` stub (start one) — exactly one, else 422. One sitting =
+  one request = one transaction. The alternative (create the treatment first, then the visit) was
+  rejected: two round-trips that can half-fail produce exactly the orphan treatment 4.8 flags.
+- **`treatment_status` is explicit on the request**, not inferred from the procedures performed.
+  The dentist answers "is this finished?" once; the server sets `status` + `closed_at`.
+- **Writes = dentist/admin, reads = any staff** (BUILD_PLAN §2).
+- **No follow-up scheduling** — that's 4.6.
+
+### Built — backend (no migration)
+- `app/schemas/visit.py` — `TreatmentStub`, `ProcedureIn`, `VisitCreate` (with a
+  **`@model_validator`** enforcing exactly-one-of `treatment_id`/`treatment`), `VisitUpdate`
+  (notes/complaint/date only — **deliberately cannot re-thread** a visit onto another treatment or
+  patient), `ProcedureRead` (catalogue name resolved), `TreatmentSummary`, `VisitRead` (visit +
+  thread + procedures in one response), `VisitListResponse`. `treatment_status` is a `Literal`, so
+  an unknown value is a schema 422 — same choice as `AppointmentStatusUpdate` (3.5).
+- `app/services/visits.py` — **third `services/` module.** `resolve_treatment()` holds the whole
+  auto-create/auto-close rule and returns `(treatment, created)` so the router can audit an
+  auto-creation. Raises **domain exceptions** (`TreatmentNotFound`, `TreatmentPatientMismatch`,
+  `TreatmentAlreadyClosed`), never `HTTPException` — unit-testable without HTTP, and 4.6 reuses it.
+  `flush()`, never `commit()`: the caller owns the transaction. `_apply_status` keeps `status` and
+  `closed_at` consistent as a pair.
+- `app/routers/visits.py` — `POST` (201), `GET /{id}`, `GET ?patient_id=|?treatment_id=` (exactly
+  one, else 422; newest first), `PATCH /{id}`. `_validate_items` checks every `treatment_item_id`
+  **up front** so a bad id is a clean 404 with nothing written, rather than a half-built visit and a
+  500 from the FK. **Retired (inactive) items are still accepted** — a procedure genuinely performed
+  with a since-retired item must stay recordable. `dentist_id` defaults to the recording staff member.
+  Registered in `main.py`.
+- `tests/test_visits.py` — 19 tests. Headliners: **auto-create**, **auto-create+auto-close** (the
+  "cleaning — done" case), **second sitting continues the thread**, **closing on the final sitting**,
+  **unknown item writes nothing** (transactional guarantee, asserts no orphan visit *or* treatment),
+  **receptionist 403 on write / 200 on read**. Plus the 422 guards (neither/both treatment forms,
+  bad status, no/both list filters), 404s, cross-patient 409, closed-treatment 409, procedure
+  name round-trip, dentist defaulting, explicit `visit_date`, and both audit rows. 85 → **104**.
+
+### No new deps / migration / env / CI
+
+### Verified
+- **104 tests pass** in-container against real Postgres, first run.
+- **Live against the compose Postgres** (real HTTP through the app, real DB):
+  - **Single-visit cleaning** → treatment created **and** `closed_at` set in one call.
+  - **RCT**: sitting 1 opened the thread, sitting 2 continued it (2 visits, one treatment, still
+    open), sitting 3 closed it; a 4th sitting → **409**.
+  - Patient history read back the way 4.7 will render it.
+  - **Unknown item → 404 with visit count unchanged and no orphan treatment.**
+  - **Receptionist: GET 200, POST 403, PATCH 403.**
+  - Audit: 4 `visit` rows + 2 `treatment` rows, both auto-created ones carrying
+    `auto_created_by_visit: true`. Cleaned up fully.
+
+### Note on the live check
+The live run drove the real app over HTTP against the real database, but **faked the auth
+dependency** rather than minting a Supabase token (that needs credentials from the gitignored
+`.env`). The role split was still exercised through `require_role` by swapping the acting staff
+member. Earlier steps used a real ES256 token through Caddy; worth doing that again at the 4.4
+checkpoint when there's a UI to click through.
+
+### Carried forward → 4.4
+- **The visit record screen**, which submits exactly the `POST /visits` shape above: a patient, a
+  treatment picker (existing open threads) *or* a new-treatment title, procedures from the
+  catalogue, notes, and the "is this finished?" toggle that sets `treatment_status`.
+- Still open in Phase 4: **clinic settings** (hours + slot size) and the **clinic timezone**. Visit
+  timestamps are UTC like everything else, so the 3.3 caveat applies to `visit_date` too.
+- Lifecycle endpoints (reopen a completed treatment, close one without recording a visit) are
+  **4.5** — the 409 on a closed treatment currently has no in-app remedy, which is expected.
+
+### Suggested commit
+`feat: add visit recording endpoints`
 
 ---
 

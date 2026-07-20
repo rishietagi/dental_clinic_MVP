@@ -159,9 +159,9 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 4.2 there are eight models — `staff_user`, `audit_log`, `patient`, `appointment`,
-`treatment_item`, `treatment`, `visit`, `procedure_performed` — and two `app/services/` modules
-(`audit`, `appointments`).
+As of 4.3 there are eight models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item`, `treatment`, `visit`, `procedure_performed` — and three `app/services/` modules
+(`audit`, `appointments`, `visits`).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -237,7 +237,16 @@ As of 4.2 there are eight models — `staff_user`, `audit_log`, `patient`, `appo
   invoices arrive; invoices are the record of what was charged.
 
 No `relationship()` navigations on any of the three — plain FK columns until a step needs ORM
-navigation (addable later without a migration). Endpoints arrive in 4.3.
+navigation (addable later without a migration). Endpoints arrived in 4.3 (see the visit recording
+API below).
+
+- **`app/services/visits.py`** — the **third `services/` module** (4.3). `resolve_treatment()` holds
+  the auto-create/auto-close rule: given a `treatment_id` it validates the thread (404 missing / 409
+  wrong patient / 409 already completed); given a stub it creates one; then it applies the requested
+  status, keeping `status` and `closed_at` consistent as a pair. It **raises domain exceptions**
+  (`TreatmentNotFound`, `TreatmentPatientMismatch`, `TreatmentAlreadyClosed`) rather than
+  `HTTPException`, so the rule is unit-testable without HTTP and the router remains the only place
+  that decides status codes. It `flush()`es but never commits — the caller owns the transaction.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
@@ -250,7 +259,37 @@ PK → roles).
 (`POST /appointments`, `GET /appointments/{id}`, `GET /appointments?date=`, `PATCH
 /appointments/{id}`, `POST /appointments/{id}/status`), and the **treatment catalogue**
 (`GET /treatment-items`, `GET/PATCH /treatment-items/{id}`, `POST /treatment-items`,
-`POST /treatment-items/{id}/deactivate|activate`).
+`POST /treatment-items/{id}/deactivate|activate`), and the **visit recording API** (`POST /visits`,
+`GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`).
+
+### Visit recording + the auto-create rule (step 4.3)
+
+`app/routers/visits.py` is where the app starts holding real clinical content, and it's the
+**second role-split resource**: writes are `require_role("dentist", "admin")` (BUILD_PLAN §2 gives
+clinical recording to the Dentist), reads are `get_current_staff` (the receptionist needs history
+for billing and follow-ups).
+
+**`POST /visits` takes exactly one of `treatment_id` or a `treatment` stub** — enforced by a Pydantic
+`@model_validator`, so a malformed request is a 422 before it reaches the router. Combined with
+`treatment_status` (`in_progress` | `completed`), that gives the behaviour BUILD_PLAN §3 asks for:
+
+- **New multi-visit work** → stub + `in_progress`: the treatment is created and left open.
+- **A one-off cleaning** → stub + `completed`: the treatment is created **and closed in the same
+  request**, so it never appears on 4.8's "open treatments with no next appointment" report. The
+  user never types the word "treatment".
+- **A follow-up sitting** → `treatment_id`: the existing thread continues, closing when the dentist
+  says the work is done.
+
+**One request is one transaction.** Recording a visit can write three tables (an auto-created
+`treatment`, the `visit`, its `procedure_performed` rows) plus audit rows; they all commit together
+or not at all, because a visit that saved without its procedures is a clinical record that lost what
+was done to the patient. For the same reason `_validate_items` checks every `treatment_item_id`
+**before** anything is written — an unknown item is a clean 404 with an untouched database, rather
+than a rolled-back partial write and a 500 from the FK. Retired (inactive) catalogue items are still
+accepted: a procedure genuinely performed with an item that was later retired must stay recordable.
+
+An auto-created treatment gets its **own audit row** (`details.auto_created_by_visit = true`) so a
+treatment that appeared without anyone explicitly asking for one is traceable.
 
 ### First resource API (patients — step 2.2)
 
