@@ -28,7 +28,7 @@ const NAV: NavItem[] = [
   { label: "Patients", icon: Users, href: "/patients" },
   { label: "Calendar", icon: CalendarDays, href: "/calendar" },
   { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
-  { label: "Admin", icon: Shield, anyOf: ["admin"] },
+  { label: "Treatments", icon: Shield, anyOf: ["admin"], href: "/settings/treatments" },
 ];
 
 const itemClass =

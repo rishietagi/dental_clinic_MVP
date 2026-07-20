@@ -15,14 +15,21 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** **PHASE 3 IS COMPLETE** (3.1–3.6 done). Phase 2 complete too (2.1–2.5). The
-appointment stack: model + FKs (3.1, migration `56fda58b828c`), **booking API + double-booking
-prevention** (3.2, migration `feae714ecef5`), **day-view calendar** (3.3), **week view + drag-drop
-reschedule** (3.4), **status workflow** (3.5), and **dashboard v1 on `/`** (3.6). **Next is Phase 4
-— Treatments, visits & follow-ups (the clinical core)**, starting with **step 4.1**
-(`treatment_item` list + Settings CRUD). Still **six migrations** (head = `feae714ecef5`; 3.3–3.6
-were query/UI/logic only — no schema change). Two seed scripts: `app.seed` (admin) and
-`app.seed_patients` (dev patients) — no appointment seed yet.
+**Where we are:** Phases 0–3 are complete. **PHASE 4 HAS BEGUN** (the clinical core). Phase 3 gave
+us the appointment stack: model + FKs (3.1, migration `56fda58b828c`), **booking API +
+double-booking prevention** (3.2, migration `feae714ecef5`), **day-view calendar** (3.3), **week
+view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 on `/`** (3.6).
+**Step 4.1 is done:** the **treatment catalogue** (`treatment_item` + admin Settings CRUD, migration
+`73aeddd50693`). **Next is step 4.2** — `treatment` + `visit` + `procedure_performed` models, where
+`appointment.treatment_id` finally gets its **real FK**. Now **seven migrations** (head =
+`73aeddd50693`). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
+
+**Treatment catalogue (4.1):** `treatment_item` = flat `name` (unique) + `default_price` + `active`.
+**`GET /treatment-items`** (+ `?include_inactive=`) and `GET /{id}` are **any active staff**;
+`POST` / `PATCH` / `{id}/deactivate` / `{id}/activate` are **`require_role("admin")`** — the
+project's **first role-split resource**. Duplicate name → **409**. **Deactivate, never delete**, so
+historical visits/invoices keep resolving. Admin screen at **`/settings/treatments`** (RoleNav's
+admin item now points there); non-admins see a read-only view (and the API rejects them anyway).
 
 **Dashboard (3.6):** `/` **is** the dashboard (was a landing page). Shows an **arrivals summary**
 (count tiles: total + one per status, same colours) and **today's schedule** table, both derived
@@ -136,6 +143,9 @@ the original step instructions say otherwise:
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
 | **appointment.treatment_id has NO FK yet** | ERD shows `treatment_id FK` | `treatment` doesn't exist until Phase 4. `treatment_id` is a bare **nullable UUID column** now (so 3.2 can reference it and the shape matches the ERD); the actual FK constraint is added in **Phase 4 (4.2)** once `treatment` exists. A test asserts a random `treatment_id` inserts fine (proves the deferral). `patient_id`/`dentist_id` ARE real FKs. | `backend/app/models/appointment.py` |
+| **Money is `Numeric`, NEVER float** | — | `treatment_item.default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in Python/Pydantic — the project's first money column (4.1). Binary floating point can't represent decimal currency exactly, and a rounding error in an invoice is a real bug. **Phase 5's invoice/payment columns must follow the same rule.** Prices cross the wire as strings so the exact decimal survives; the frontend formats with `Intl.NumberFormat` and never does float arithmetic on them. | `backend/app/models/treatment_item.py` |
+| **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
+| **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
 | **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
 | **Double-booking = GiST EXCLUDE constraint (first hand-written migration)** | — | `appointment_no_overlap` is a Postgres `EXCLUDE USING gist` constraint — the real double-booking guarantee (survives two racing PCs). **First hand-written migration** (autogenerate can't emit EXCLUDE / CREATE EXTENSION); needs the **`btree_gist`** extension. The range must use **immutable** arithmetic: `timestamptz + interval` is only STABLE and Postgres rejects it in a constraint, so we use `tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min*interval '1 min', '[)')`. The service `find_conflicts` pre-check uses the SAME expression (keep them in sync). Excludes `cancelled`; NULL dentist never clashes. | `backend/alembic/versions/feae714ecef5_*.py`, `backend/app/services/appointments.py` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
@@ -151,6 +161,75 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.1: treatment catalogue (PHASE 4 BEGINS)
+
+**Status:** complete — model + migration + role-split API + admin Settings screen, verified (73
+tests pass; `numeric(10,2)` confirmed in the DB; migration reversible; admin-vs-receptionist proven
+live). For commit. **Two firsts: the project's first money column, and the first real use of
+`require_role`.**
+
+### Scope decisions (confirmed with user)
+- **Full vertical slice** — model + migration + API + the admin screen (the roadmap line is "list +
+  Settings CRUD").
+- **Read: any active staff · Write: admin only.** Reads use `get_current_staff` (visits in 4.3 and
+  invoices in 5.2 need the list); writes use `require_role("admin")` per BUILD_PLAN §2.
+- **Deactivate, never delete**; `default_price` **required**, `Numeric(10,2)`, `>= 0`.
+
+### Built — backend
+- `app/models/treatment_item.py` — `TreatmentItem`: uuid PK, `name` (Text, **unique + indexed**),
+  `default_price` (**`Numeric(10,2)`**), `active` (default true), `created_at`/`updated_at`.
+  Registered in `app/models/__init__.py`.
+- `alembic/versions/73aeddd50693_add_treatment_item.py` — autogenerated, reviewed clean.
+  `down_revision = feae714ecef5`. Creates the table + `ix_treatment_item_name` (unique).
+- `app/schemas/treatment_item.py` — Create/Update/Read/ListResponse. Prices are **`Decimal`** with
+  `max_digits=10, decimal_places=2, ge=0`. No `active` on create/update (activation is its own
+  endpoint pair, like patient archive/unarchive).
+- `app/routers/treatment_items.py` (`prefix="/treatment-items"`, registered in `main.py`):
+  `GET ""` (+`include_inactive`) and `GET /{id}` → `get_current_staff`; `POST`, `PATCH`,
+  `POST /{id}/deactivate`, `POST /{id}/activate` → `require_role("admin")`. Mutations audited
+  (`entity="treatment_item"`). A unique-name violation is translated to a **409** rather than a 500.
+- `tests/test_treatment_items.py` — 8 tests incl. the headline **`test_non_admin_cannot_write`**
+  (receptionist: GET 200, every mutation 403), duplicate → 409, **exact Decimal round-trip**
+  (1999.99 / 2500.05), deactivate hidden-but-fetchable, activate restores. 65 → **73**.
+
+### Built — frontend
+- `lib/use-treatment-items.ts` — list hook (+`refetch` nonce) and `createItem`/`updateItem`/
+  `setItemActive`, each returning `"ok" | "forbidden" | "conflict" | {error}` so 403 and 409 show
+  distinctly. Prices handled as **strings** (never parsed to float for arithmetic); `formatPrice`
+  uses `Intl.NumberFormat("en-IN", INR)` for display only.
+- `app/settings/treatments/page.tsx` + `treatment-list.tsx` — the catalogue table (name, price,
+  state, actions), an add form, inline edit, Retire/Restore, and a "Show retired" toggle.
+  **Admin gate** via `useCurrentStaff()` → non-admins get a read-only view + a short note. First
+  screen under `app/settings/`.
+- `app/role-nav.tsx` — the admin placeholder is now **Treatments → `/settings/treatments`**.
+
+### No new deps
+`Numeric`/`Decimal` are SQLAlchemy/Pydantic/stdlib built-ins.
+
+### Verified
+- Migration: `feae714ecef5 -> 73aeddd50693`; `\d treatment_item` shows **`default_price |
+  numeric(10,2)`** (not double precision), unique `ix_treatment_item_name`, `active` default true.
+  **Reversible** (downgrade drops it, upgrade recreates). Image rebuilt before applying.
+- **73 tests pass** in-container against real Postgres.
+- Frontend `lint` + `build` green; `/settings/treatments` is a new route; Docker image rebuilds.
+- **Live against the compose Postgres:** admin created 5 real items (prices exact: `300.00`,
+  `1200.50`, `1999.99`); duplicate name → **409**; **receptionist GET 200 but POST/PATCH/deactivate
+  all 403**; deactivate hid the item from the default list yet it remained under
+  `include_inactive=true`. The 5 items were left in place for the visual check.
+- **Through Caddy:** `/settings/treatments` signed-out → **307 → /login**; `/api/treatment-items`
+  no token → **401**.
+
+### Carried forward → 4.2
+- `treatment` + `visit` + `procedure_performed` models, and **`appointment.treatment_id` finally
+  gets its real FK** (deferred since 3.1). `procedure_performed` will FK to `treatment_item`.
+- Still open elsewhere in Phase 4: **clinic settings** (hours + slot size, hardcoded in
+  `lib/week.ts`) and the **clinic timezone** (the UTC-day caveat from 3.3).
+
+### Suggested commit
+`feat: add treatment catalogue`
 
 ---
 

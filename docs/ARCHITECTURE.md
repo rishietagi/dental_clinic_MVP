@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-**Honest to the code as of step 3.6 (Phase 3 complete).** This describes what is built, not what
+**Honest to the code as of step 4.1 (Phase 4 begun).** This describes what is built, not what
 is planned.
 The target architecture lives in [BUILD_PLAN.md](BUILD_PLAN.md); this file catches up to it
 one step at a time.
@@ -159,8 +159,8 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 3.2 there are four models — `staff_user`, `audit_log`, `patient`, `appointment` —
-and two `app/services/` modules (`audit`, `appointments`).
+As of 4.1 there are five models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item` — and two `app/services/` modules (`audit`, `appointments`).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -205,6 +205,13 @@ and two `app/services/` modules (`audit`, `appointments`).
   UX layer (a friendly 409) on top of the real guarantee, which is the DB constraint — the two use
   the identical UTC `tsrange` overlap expression so they always agree. Returns `[]` for an
   unassigned (`dentist_id is None`) slot.
+- **`app/models/treatment_item.py`** — `TreatmentItem`, the flat treatment/procedure catalogue
+  (Phase 4, step 4.1): `name` (unique, indexed), `default_price`, `active`, timestamps. **The
+  project's first money column** — `default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in
+  Python, **never a float**: binary floating point cannot represent decimal currency exactly, and a
+  rounding error in an invoice is a real bug. Phase 5's invoice/payment amounts must follow the same
+  rule. Items are **deactivated, never deleted** (`active`), so past visits/invoices that reference
+  one still resolve.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
@@ -215,7 +222,9 @@ PK → roles).
 `/health`, `/me`, `/admin/ping`, the **patient CRUD** (`POST /patients`, `GET/PATCH
 /patients/{id}`, `POST /patients/{id}/archive|unarchive`), and the **appointment booking API**
 (`POST /appointments`, `GET /appointments/{id}`, `GET /appointments?date=`, `PATCH
-/appointments/{id}`, `POST /appointments/{id}/status`).
+/appointments/{id}`, `POST /appointments/{id}/status`), and the **treatment catalogue**
+(`GET /treatment-items`, `GET/PATCH /treatment-items/{id}`, `POST /treatment-items`,
+`POST /treatment-items/{id}/deactivate|activate`).
 
 ### First resource API (patients — step 2.2)
 
@@ -306,6 +315,29 @@ one endpoint that returns `medical_notes`) and shows demographics in a `Card` pl
 non-empty (BUILD_PLAN §1: the one diabetic/blood-thinner patient is exactly where it matters).
 Read-only this step; list rows link into it. The id is a **path segment** (allowed — the
 no-id-in-URL rule is about query strings).
+
+### Treatment catalogue + the first role split (step 4.1)
+
+`treatment_item` is the small "name + default price" list BUILD_PLAN §1 kept when the rate-card
+module was cut — a dropdown with a price, so invoices don't have to invent one. Visits (4.3) attach
+procedures to these items and invoice lines (5.2) price from them.
+
+**This is the project's first role-split resource.** Everything before it guarded every route with
+`get_current_staff`; here the two halves differ (BUILD_PLAN §2):
+
+| | Guard | Why |
+|---|---|---|
+| `GET /treatment-items` (+`?include_inactive=`), `GET /{id}` | `get_current_staff` | The dentist and receptionist need the catalogue to record visits and build invoices. |
+| `POST`, `PATCH`, `POST /{id}/deactivate`, `POST /{id}/activate` | `require_role("admin")` | Editing the treatment list is an Admin responsibility. |
+
+`require_role` has existed since 1.3 but this is its first use on a real resource. The Settings
+screen hides the editing controls from non-admins, but that is convenience only — **the API is the
+guard**, and a test asserts a receptionist receives 403 on every mutation. `name` is unique, so a
+duplicate returns **409** rather than a raw constraint error. Mutations are audited.
+
+The admin screen is **`/settings/treatments`** (`app/settings/treatments/`, the first page under
+`app/settings/`), reachable from RoleNav's admin-only "Treatments" item. Prices travel as strings
+and are formatted for display with `Intl.NumberFormat` — never parsed into a float for arithmetic.
 
 ### Dashboard — the home screen (step 3.6)
 
