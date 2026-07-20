@@ -159,8 +159,9 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 4.1 there are five models — `staff_user`, `audit_log`, `patient`, `appointment`,
-`treatment_item` — and two `app/services/` modules (`audit`, `appointments`).
+As of 4.2 there are eight models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item`, `treatment`, `visit`, `procedure_performed` — and two `app/services/` modules
+(`audit`, `appointments`).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -193,9 +194,9 @@ As of 4.1 there are five models — `staff_user`, `audit_log`, `patient`, `appoi
 - **`app/models/appointment.py`** — `Appointment`, a booked calendar slot (Phase 3, step 3.1).
   **The schema's first table with foreign keys:** `patient_id → patient.id` (NOT NULL — always
   belongs to a patient) and `dentist_id → staff_user.id` (nullable — a slot may be unassigned).
-  `treatment_id` is a **bare nullable UUID with no FK yet** — the `treatment` table doesn't exist
-  until Phase 4, so its FK constraint is deferred to 4.2 (a first booking has no treatment; a
-  follow-up does). `start_time` (timestamptz), `duration_min` (default 30), `status` (default
+  `treatment_id → treatment.id` is nullable and, **as of 4.2, a real FK** (it was a bare UUID from
+  3.1 until the `treatment` table existed — a first booking has no treatment; a follow-up does).
+  `start_time` (timestamptz), `duration_min` (default 30), `status` (default
   `booked` — the transition *workflow* is 3.5, this step is only the column), `reason` (free
   text), `created_at`/`updated_at`. No `relationship()` navigations yet. Endpoints arrived in 3.2
   (see the booking API below).
@@ -212,6 +213,31 @@ As of 4.1 there are five models — `staff_user`, `audit_log`, `patient`, `appoi
   rounding error in an invoice is a real bug. Phase 5's invoice/payment amounts must follow the same
   rule. Items are **deactivated, never deleted** (`active`), so past visits/invoices that reference
   one still resolve.
+- **`app/models/treatment.py`** — `Treatment`, **the heart of the clinical model** (Phase 4, step
+  4.2). Dental work is multi-visit — an RCT is 2–4 sittings and the dentist often doesn't know the
+  count upfront — so a visit can't be a standalone event; it needs a thread to hang off. A treatment
+  is `patient_id` (FK, NOT NULL) + `title` ("RCT tooth 36") + nullable `tooth_ref` + `status`
+  (`in_progress` / `completed`, default `in_progress`) + `started_at` / nullable `closed_at`.
+  **It is NOT a treatment plan** — no estimates, no quotes, no acceptance tracking (out of scope);
+  it answers only *what, which tooth, still ongoing?*. `status` is plain Text with no CHECK/enum,
+  like `appointment.status` — the transitions are enforced in the API in 4.5.
+- **`app/models/visit.py`** — `Visit`, one sitting. `treatment_id → treatment.id` is **NOT NULL**:
+  every visit hangs off a treatment, which is what makes the thread real. Single-visit work doesn't
+  escape it — the visit API (4.3) auto-creates and auto-closes a treatment for a one-off cleaning,
+  so the user never sees the concept. `patient_id` (FK, NOT NULL) is **deliberately denormalised**
+  from the treatment: nearly every clinical read is "this patient's visits", and carrying it
+  directly avoids a join on the hottest path. `appointment_id` is **nullable** (walk-ins happen),
+  as is `dentist_id`. Plus `visit_date`, `complaint`, `clinical_notes`.
+- **`app/models/procedure_performed.py`** — `ProcedurePerformed`, the join row between a visit and
+  the 4.1 catalogue: `visit_id` (FK) + `treatment_item_id` (FK) + nullable per-procedure
+  `tooth_ref`. One visit can contain several procedures, hence a table rather than a column. This FK
+  is exactly why treatment items **deactivate rather than delete** — a retired item must still
+  resolve or an old visit becomes unreadable. **No price column, deliberately:** whether a procedure
+  should snapshot the price at the time it was performed is a question **5.2** must answer when
+  invoices arrive; invoices are the record of what was charged.
+
+No `relationship()` navigations on any of the three — plain FK columns until a step needs ORM
+navigation (addable later without a migration). Endpoints arrive in 4.3.
 
 **Why roles live here, not in Supabase:** Supabase Auth owns credentials; our app owns
 authorization. Keeping `roles` in our Postgres means role checks are plain SQL the backend
@@ -401,12 +427,18 @@ how the schema evolves without losing patient records.
 - Migration files live in `backend/alembic/versions/`. Each has a `revision` id and a
   `down_revision` pointing at the previous one, forming an ordered chain Alembic walks on
   `upgrade`/`downgrade`. The root is the **empty** `78e9327c7254` (`down_revision = None`); the
-  current head is `feae714ecef5` (the appointment no-overlap constraint).
+  current head is `999215bea700` (treatment + visit + procedure_performed, 4.2).
 - Alembic tracks which revision the database is at in an `alembic_version` table it manages.
 - Most migrations are **autogenerated** (`--autogenerate` diffs `Base.metadata` against the live
   DB). The exception is `feae714ecef5` (3.2), the first **hand-written** migration: autogenerate
   cannot express a GiST `EXCLUDE` constraint or `CREATE EXTENSION`, so its body is raw
   `op.execute(...)` SQL. It also needs the `btree_gist` extension, which the migration creates.
+- **Autogenerated `op.create_foreign_key(None, ...)` must be given a name by hand.** Alembic emits
+  `None` for a constraint added to an existing table (as in `999215bea700`, which added
+  `appointment.treatment_id`'s FK). That *upgrades* fine — Postgres invents a name — but the paired
+  `op.drop_constraint(None, ...)` cannot drop an unnamed constraint, so the downgrade fails and the
+  migration is silently irreversible. Name it explicitly (`appointment_treatment_id_fkey`, matching
+  Postgres's own convention) and test the downgrade.
 - **The DB URL is not in `alembic.ini`.** That line was deleted; `alembic/env.py` reads
   `os.environ["DATABASE_URL"]` instead. No fallback means a migration **cannot run** without
   an explicit `DATABASE_URL` — so nobody can accidentally migrate the wrong database. Proven:

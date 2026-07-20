@@ -9,11 +9,10 @@ Foreign keys — this is the schema's first table with real FKs:
 - `patient_id` -> `patient.id`, NOT NULL. An appointment always belongs to a patient.
 - `dentist_id` -> `staff_user.id`, nullable. A slot may be booked before a dentist
   is assigned (the clinic has effectively one dentist, so it's usually set).
-- `treatment_id` is a bare nullable UUID with **NO foreign key yet**: the
-  `treatment` table doesn't exist until Phase 4. A first-time booking has no
-  treatment; a follow-up does (ERD §9, `APPOINTMENT.treatment_id` nullable). The
-  actual FK constraint is added in Phase 4 (4.2) once `treatment` exists — see the
-  LOG standing-decisions note.
+- `treatment_id` -> `treatment.id`, nullable. A first-time booking has no
+  treatment; a follow-up booked from a visit screen (4.6) carries the treatment
+  it continues. This FK was **deferred from 3.1 to 4.2** because the `treatment`
+  table didn't exist until Phase 4 — it is real now.
 
 No `relationship()` navigations yet — plain FK columns until a step needs ORM
 navigation (can be added later without a migration).
@@ -43,10 +42,11 @@ class Appointment(Base):
         PGUUID(as_uuid=True), ForeignKey("patient.id"), nullable=False
     )
 
-    # NO ForeignKey yet — `treatment` doesn't exist until Phase 4. Nullable: a
-    # first booking has no treatment; a follow-up does. FK constraint added in 4.2.
+    # Nullable: a first booking has no treatment; a follow-up does. The FK is
+    # real as of 4.2 (deferred from 3.1 until `treatment` existed). No ondelete —
+    # treatments are never hard-deleted, so cascade behaviour would never fire.
     treatment_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), nullable=True
+        PGUUID(as_uuid=True), ForeignKey("treatment.id"), nullable=True
     )
 
     # Nullable: a slot may be booked before a dentist is assigned.

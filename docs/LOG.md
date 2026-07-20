@@ -20,9 +20,19 @@ us the appointment stack: model + FKs (3.1, migration `56fda58b828c`), **booking
 double-booking prevention** (3.2, migration `feae714ecef5`), **day-view calendar** (3.3), **week
 view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 on `/`** (3.6).
 **Step 4.1 is done:** the **treatment catalogue** (`treatment_item` + admin Settings CRUD, migration
-`73aeddd50693`). **Next is step 4.2** — `treatment` + `visit` + `procedure_performed` models, where
-`appointment.treatment_id` finally gets its **real FK**. Now **seven migrations** (head =
-`73aeddd50693`). Two seed scripts: `app.seed` (admin) and `app.seed_patients` (dev patients).
+`73aeddd50693`). **Step 4.2 is done:** the **clinical core models** — `treatment` + `visit` +
+`procedure_performed`, and **`appointment.treatment_id` finally got its real FK** (migration
+`999215bea700`). **Next is step 4.3** — the visit recording API (auto-creates a treatment if new).
+Now **eight migrations** (head = `999215bea700`) and **eight models**. Two seed scripts: `app.seed`
+(admin) and `app.seed_patients` (dev patients).
+
+**OPEN ITEMS FOR PHASE 4** (deliberately deferred, don't lose these):
+| Item | What's owed | Where it bites |
+|---|---|---|
+| **Clinic hours + slot size hardcoded** | Week view assumes 09:00–17:30 / 30-min slots. Should come from clinic settings. | `frontend/lib/week.ts` (`DAY_START_HOUR`, `DAY_END_HOUR`, `SLOT_MIN`) |
+| **No clinic timezone** | "Today"/day bounds are UTC on the API and browser-local in the UI. Clinic is IST. Needs a clinic-timezone setting. | `routers/appointments.py` day bounds; `lib/week.ts`, `today-dashboard.tsx` |
+| **No appointment seed script** | Only `app.seed` (admin) + `app.seed_patients` exist. Demo appointments have been created ad hoc. | `backend/app/` |
+| **Price snapshot question (→ 5.2)** | `procedure_performed` has **no price column**. 5.2 must decide whether an invoice line snapshots the price at the time of the procedure, so re-reading an old visit doesn't show today's price. Raised in 4.2, answered in Phase 5. | `backend/app/models/procedure_performed.py` |
 
 **Treatment catalogue (4.1):** `treatment_item` = flat `name` (unique) + `default_price` + `active`.
 **`GET /treatment-items`** (+ `?include_inactive=`) and `GET /{id}` are **any active staff**;
@@ -66,10 +76,21 @@ which now returns **`patient_name` + `dentist_name`** (resolved via a join in `l
 slot could fall on the next UTC day. Consistent with the app's UTC-everywhere treatment; fix needs
 the Phase-4 clinic-timezone setting — **carried forward, do not build ahead.**
 
+**Clinical core (4.2):** `treatment` threads visits together — `patient_id` (FK, NOT NULL), `title`,
+nullable `tooth_ref`, `status` (`in_progress`/`completed`, default `in_progress`, **no CHECK/enum** —
+transitions are API-enforced in 4.5), `started_at`, nullable `closed_at`. **NOT a treatment plan** —
+no estimates/quotes/acceptance. `visit` = one sitting; **`treatment_id` is NOT NULL** (every visit
+hangs off a treatment — 4.3 auto-creates/auto-closes one for single-visit work so the user never
+sees the concept), `patient_id` NOT NULL and deliberately denormalised, `appointment_id` **nullable**
+(walk-ins), `dentist_id` nullable. `procedure_performed` = `visit_id` + `treatment_item_id` + nullable
+`tooth_ref`, **no price column** (open question for 5.2). No `relationship()` navigations on any of
+them yet. No endpoints — that's 4.3.
+
 **Appointment rules to hold onto:** `patient_id` → `patient.id` is a real FK, NOT NULL;
-`dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` is a
-bare nullable UUID with NO foreign key** — deferred to 4.2. `status` defaults to `booked` (the
-transition *workflow* is 3.5); `duration_min` defaults to 30.
+`dentist_id` → `staff_user.id` is a real FK, nullable (unassigned allowed). **`treatment_id` →
+`treatment.id` is a real FK as of 4.2**, still nullable (a first booking has no treatment; a
+follow-up does). `status` defaults to `booked` (the transition *workflow* is 3.5); `duration_min`
+defaults to 30.
 
 **Booking rules (3.2):** endpoints are `POST /appointments`, `GET /appointments/{id}`,
 `GET /appointments?date=YYYY-MM-DD` (day list), `PATCH /appointments/{id}` (reschedule) — all
@@ -142,7 +163,10 @@ the original step instructions say otherwise:
 | **Migrations ship in the image** | — | `alembic upgrade head` runs from the built image, so **rebuild the backend image after adding a migration** before applying — otherwise Alembic uses the image's stale copy and silently no-ops ("already at head"). Generating a migration uses a `-v backend:/app` bind mount so the file lands on the host. | `backend/Dockerfile` |
 | **audit_log has a JSONB `details` col** | ERD has only id/actor_id/action/entity/entity_id/at | Added a nullable `JSONB details` beyond the ERD for context (e.g. what changed). Deliberate, flagged deviation. `actor_id` is nullable with **no FK** (audit outlives its actors; null = system/seed). | `backend/app/models/audit_log.py` |
 | **patient stores DOB, not `age`** | ERD says `int age` | A stored age goes stale; we store nullable `date_of_birth` and compute `age` via a read-only `@property`. Also added `updated_at` beyond the ERD. Deliberate, flagged deviations. | `backend/app/models/patient.py` |
-| **appointment.treatment_id has NO FK yet** | ERD shows `treatment_id FK` | `treatment` doesn't exist until Phase 4. `treatment_id` is a bare **nullable UUID column** now (so 3.2 can reference it and the shape matches the ERD); the actual FK constraint is added in **Phase 4 (4.2)** once `treatment` exists. A test asserts a random `treatment_id` inserts fine (proves the deferral). `patient_id`/`dentist_id` ARE real FKs. | `backend/app/models/appointment.py` |
+| **appointment.treatment_id FK — CLOSED in 4.2** | ERD shows `treatment_id FK` | Was a bare nullable UUID from 3.1 (the `treatment` table didn't exist). **4.2 added the real FK** (`appointment_treatment_id_fkey`, migration `999215bea700`); the column stays nullable and has no `ondelete`. The test that asserted the FK's *absence* was **inverted, not deleted** (`test_treatment_id_fk_is_enforced`), so the deferral being paid off stays visible. | `backend/app/models/appointment.py` |
+| **`visit.treatment_id` is NOT NULL** | ERD draws a plain FK | Every visit hangs off a treatment, no exceptions — that's what makes the thread real. Single-visit work doesn't escape it: **4.3 auto-creates and auto-closes a treatment** for a one-off cleaning (BUILD_PLAN §3), so the receptionist never sees the word. Allowing NULL would let orphan visits accumulate and silently break the "open treatments with no next appointment" report (4.8), the app's most valuable report. `visit.patient_id` is also NOT NULL and **deliberately denormalised** from the treatment — nearly every clinical read is "this patient's visits". | `backend/app/models/visit.py` |
+| **`procedure_performed` has no price column** | — | Strictly the ERD's four columns. Whether a procedure should snapshot the price at the time it was performed (so an old visit doesn't re-read at today's price) is a real question, but it belongs to **5.2** — invoices are the record of what was charged. Deliberately deferred, not overlooked. | `backend/app/models/procedure_performed.py` |
+| **Autogenerated FK constraints need a name by hand** | — | `op.create_foreign_key(None, ...)` upgrades fine (Postgres invents a name) but the paired `op.drop_constraint(None, ...)` **cannot drop an unnamed constraint** — the downgrade fails and the migration is silently irreversible. Hit in `999215bea700`; fixed by naming it `appointment_treatment_id_fkey`. **Always test the downgrade.** | `backend/alembic/versions/999215bea700_*.py` |
 | **Money is `Numeric`, NEVER float** | — | `treatment_item.default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in Python/Pydantic — the project's first money column (4.1). Binary floating point can't represent decimal currency exactly, and a rounding error in an invoice is a real bug. **Phase 5's invoice/payment columns must follow the same rule.** Prices cross the wire as strings so the exact decimal survives; the frontend formats with `Intl.NumberFormat` and never does float arithmetic on them. | `backend/app/models/treatment_item.py` |
 | **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
@@ -161,6 +185,91 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-20 — Step 4.2: treatment + visit + procedure_performed models
+
+**Status:** complete — three models + one migration + tests, verified against the real Docker
+Postgres (schema inspected, migration reversible, 85 tests pass, the RCT thread built and read back
+live). For commit. **The domain rule that justifies this whole project is now schema**, and the
+oldest deferral in the codebase is paid off.
+
+### Scope decisions (confirmed with user)
+- **Models + migration + model tests only.** No schemas, no routers, no UI — the visit recording API
+  is 4.3, the screen is 4.4, lifecycle transitions are 4.5. Matches the roadmap line exactly.
+- **`appointment.treatment_id` gets its real FK here** — deferred since 3.1 because `treatment`
+  didn't exist. Stays nullable; **no `ondelete`** (consistent with 3.1: nothing is ever hard-deleted,
+  so cascades would never fire, and restrict-by-default is the right medico-legal answer).
+- **The deferral test is inverted, not deleted** — `test_treatment_id_has_no_fk_yet` became
+  `test_treatment_id_fk_is_enforced`, so the change stays visible and deliberate in the diff.
+
+### Built
+- `app/models/treatment.py` — `Treatment`: the **thread**. `patient_id` (FK, NOT NULL, indexed),
+  `title`, nullable `tooth_ref`, `status` (default `in_progress`, plain Text — **no CHECK/enum**,
+  same call as `appointment.status`; transitions land in 4.5), `started_at`, nullable `closed_at`,
+  timestamps. **No cost/estimate/acceptance columns** — the guard-rail against treatment-plan creep.
+- `app/models/visit.py` — `Visit`: one sitting. **`treatment_id` NOT NULL** (the load-bearing
+  decision — see the standing-decisions row), `patient_id` NOT NULL + denormalised, `appointment_id`
+  **nullable** (walk-ins), `dentist_id` nullable, `visit_date`, `complaint`, `clinical_notes`.
+- `app/models/procedure_performed.py` — `ProcedurePerformed`: `visit_id` + `treatment_item_id`
+  (the 4.1 catalogue link) + nullable per-procedure `tooth_ref`. **No price column** — open for 5.2.
+- `app/models/appointment.py` — `treatment_id` gains `ForeignKey("treatment.id")`; docstring updated.
+- `app/models/__init__.py` — the three new models registered.
+- `alembic/versions/999215bea700_add_treatment_visit_procedure_performed.py` — autogenerated,
+  `down_revision = 73aeddd50693`. Three `create_table`s + the appointment FK. Indexes on
+  `treatment.patient_id`, `visit.patient_id`, `visit.treatment_id`, `procedure_performed.visit_id`.
+- `tests/test_treatment_models.py` — 10 tests: shape, full FK introspection, nullability
+  (`treatment_id` required / `appointment_id` not), defaults, **one treatment threading three
+  visits** (the RCT case), orphan + bogus-treatment rejection, walk-in visit, procedures linking to
+  the catalogue, catalogue FK enforced, appointment↔visit link.
+- `tests/test_appointment.py` — the two deferral assertions inverted; cleanup fixture reordered for
+  the new FK. 73 → **85 tests**.
+
+### Bug hit + fixed during build (worth remembering)
+1. **Autogenerate emitted `op.create_foreign_key(None, ...)`** for the appointment FK. Upgrades fine
+   (Postgres invents a name) but `op.drop_constraint(None, ...)` can't drop an unnamed constraint —
+   the migration would have been **silently irreversible**. Caught by actually running the
+   downgrade. Named it `appointment_treatment_id_fkey`. Recorded as a standing decision.
+2. **Test teardown hit `ForeignKeyViolation`s** even though the cleanup list was correctly ordered:
+   `db.delete()` only *stages* the row, and a single trailing `db.commit()` lets SQLAlchemy pick its
+   own flush order, which ignores that list. Fix: **commit after each delete**. Applied to both
+   suites. (The 7 errors were all teardown, never assertions — worth reading the traceback rather
+   than reordering the list on instinct.)
+
+### No new deps / env / CI
+`ForeignKey`/`Text`/`TIMESTAMP` already in use. CI's Postgres + `alembic upgrade head` + pytest
+cover the new migration and tests automatically.
+
+### Verified (against the real db)
+- Autogenerate detected exactly the four intended changes. `\d treatment` / `\d visit` /
+  `\d procedure_performed` show the exact columns, nullability, defaults (`status='in_progress'`),
+  indexes, and every FK. `\d appointment` now shows **`appointment_treatment_id_fkey`** with
+  `treatment_id` still nullable.
+- **Reversible:** `downgrade -1` drops all three tables **and** the appointment FK (back to a bare
+  nullable UUID — the 3.1 shape); `upgrade head` recreates. Image rebuilt before applying (the
+  stale-image footgun).
+- **85 tests pass** in-container against real Postgres (73 prior + 12).
+- **Live against the compose Postgres:** built a real RCT thread — patient → treatment → **3 visits**
+  (one scheduled via an appointment carrying `treatment_id`, two walk-ins) → 2 procedures priced from
+  a catalogue item — and read it back sitting-by-sitting. Guards all bite: bogus `visit.treatment_id`
+  rejected, **null `visit.treatment_id` rejected**, bogus `appointment.treatment_id` rejected (the
+  3.1 deferral demonstrably closed), and **deleting a treatment that has visits is blocked**. Cleaned
+  up fully.
+
+### Carried forward → 4.3
+- **Visit recording API**, which must **auto-create a treatment when the work is new and auto-close
+  it for single-visit work** — that's what keeps `visit.treatment_id` NOT NULL invisible to the user.
+- Still open elsewhere in Phase 4: **clinic settings** (hours + slot size, hardcoded in
+  `lib/week.ts`) and the **clinic timezone** (the UTC-day caveat from 3.3). New: the
+  **price-snapshot question for 5.2**.
+
+### Housekeeping note (not touched)
+There's a stray `backend;C` directory in the project root — an artifact of a malformed shell command
+in some earlier session, not referenced by anything. Left alone; delete at your discretion.
+
+### Suggested commit
+`feat: add treatment and visit models`
 
 ---
 

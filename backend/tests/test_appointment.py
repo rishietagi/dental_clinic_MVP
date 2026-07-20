@@ -8,8 +8,11 @@ throwaway patient and cleans both up.
 Two things beyond the usual insert/defaults are worth proving here because this
 is the schema's first table with foreign keys:
 - The `patient_id` FK is real (a bad id is rejected by the DB), not decorative.
-- `treatment_id` has NO FK yet (a random id inserts fine) — the Phase 4 deferral,
-  asserted behaviourally so a future FK addition is a deliberate, visible change.
+- `treatment_id`'s FK is real too, **as of step 4.2**. It was deliberately absent
+  from 3.1 until the `treatment` table existed, and a test here asserted that
+  absence. Now that 4.2 has added the constraint, the same test asserts the
+  opposite — a random treatment_id is rejected, a real one commits. Inverted
+  rather than deleted so the deferral being paid off stays visible in history.
 """
 
 import uuid
@@ -23,6 +26,7 @@ from app.config import settings
 from app.db import SessionLocal, engine
 from app.models.appointment import Appointment
 from app.models.patient import Patient
+from app.models.treatment import Treatment
 
 
 @pytest.fixture(scope="module")
@@ -47,12 +51,16 @@ def session(db_available):
         yield db, cleanup
     finally:
         db.rollback()
-        # Delete appointments before patients (FK order).
-        for model, oid in sorted(cleanup, key=lambda t: t[0] is Patient):
+        # FK order: appointments reference treatments, treatments reference
+        # patients, so delete children first.
+        order = [Appointment, Treatment, Patient]
+        # Commit after each delete so the FK order above is the order Postgres
+        # actually sees (a single trailing commit lets SQLAlchemy reorder them).
+        for model, oid in sorted(cleanup, key=lambda t: order.index(t[0])):
             obj = db.get(model, oid)
             if obj is not None:
                 db.delete(obj)
-        db.commit()
+                db.commit()
         db.close()
 
 
@@ -77,7 +85,7 @@ def test_migration_created_appointment_table(db_available):
 
 
 def test_foreign_keys(db_available):
-    """patient_id and dentist_id are FKs; treatment_id is NOT (deferred to Phase 4)."""
+    """patient_id, dentist_id and (since 4.2) treatment_id are all real FKs."""
     inspector = inspect(engine)
     fks = inspector.get_foreign_keys("appointment")
     referred = {
@@ -85,9 +93,8 @@ def test_foreign_keys(db_available):
     }
     assert referred.get(("patient_id",)) == "patient"
     assert referred.get(("dentist_id",)) == "staff_user"
-    # The deferral: treatment_id has no FK until Phase 4.
-    constrained = {tuple(fk["constrained_columns"]) for fk in fks}
-    assert ("treatment_id",) not in constrained
+    # Added in 4.2, once the `treatment` table existed.
+    assert referred.get(("treatment_id",)) == "treatment"
 
 
 # --- persistence -------------------------------------------------------------
@@ -130,21 +137,46 @@ def test_patient_fk_is_enforced(session):
     db.rollback()
 
 
-def test_treatment_id_has_no_fk_yet(session):
-    """A random treatment_id inserts fine — no FK constraint until Phase 4."""
+def test_treatment_id_fk_is_enforced(session):
+    """A random treatment_id is now rejected — the FK is real as of 4.2.
+
+    The inverse of the test this replaces, which asserted the FK's *absence*
+    while the deferral stood.
+    """
     db, cleanup = session
     patient = _make_patient(db, cleanup)
 
     appt = Appointment(
         patient_id=patient.id,
-        treatment_id=uuid.uuid4(),  # no treatment table exists; must NOT be rejected
+        treatment_id=uuid.uuid4(),  # no such treatment
         start_time=datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc),
     )
     db.add(appt)
-    db.commit()  # would raise IntegrityError if a FK existed
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_treatment_id_accepts_a_real_treatment(session):
+    """A follow-up carries the treatment it continues; unset stays allowed."""
+    db, cleanup = session
+    patient = _make_patient(db, cleanup)
+
+    treatment = Treatment(patient_id=patient.id, title="RCT tooth 36")
+    db.add(treatment)
+    db.commit()
+    cleanup.append((Treatment, treatment.id))
+
+    appt = Appointment(
+        patient_id=patient.id,
+        treatment_id=treatment.id,
+        start_time=datetime(2026, 8, 9, 10, 0, tzinfo=timezone.utc),
+    )
+    db.add(appt)
+    db.commit()
     cleanup.append((Appointment, appt.id))
     db.expire_all()
 
     fetched = db.get(Appointment, appt.id)
     assert fetched is not None
-    assert fetched.treatment_id is not None
+    assert fetched.treatment_id == treatment.id
