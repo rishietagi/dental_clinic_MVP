@@ -245,7 +245,9 @@ API below).
   row pinned to `id = 1` by a CHECK, seeded by the migration, holding the clinic's `open_hour` /
   `close_hour` / `slot_minutes` / `timezone`. These were hardcoded through Phase 3–4; now the calendar
   grid, the visit form's follow-up duration, and — crucially — the appointment day/range bounds read
-  them. `GET /clinic-settings` is any active staff, `PATCH` is admin-only + audited.
+  them. **5.4 added identity** — `clinic_name` (NOT NULL, default 'Dental Clinic'), `address`, `phone`
+  (nullable) — printed on the receipt header (migration `e8dbf0db4dec`, the 11th). `GET /clinic-settings`
+  is any active staff, `PATCH` is admin-only + audited.
 - **`app/services/clinic.py`** — the **fifth `services/` module** (4.9). `clinic_day_bounds(day, tz)`
   returns the UTC window of a clinic-local calendar day using stdlib `zoneinfo`. This is the timezone
   fix: `list_appointments` bounds "a day" in the clinic zone, so an IST-evening appointment (whose UTC
@@ -309,9 +311,17 @@ PK → roles).
 `POST /treatment-items/{id}/deactivate|activate`), and the **visit recording API** (`POST /visits`,
 `GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`), and the
 **treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`), and the
-**invoice API** (`POST /visits/{visit_id}/invoice` to generate, `POST /invoices/{invoice_id}/payments`
-to capture a payment, `GET /invoices/{invoice_id}`). Every invoice read carries its lines, its
-payments, and the derived `status` / `amount_paid` / `outstanding`.
+**invoice API** (`POST /visits/{visit_id}/invoice` to generate, `GET /visits/{visit_id}/invoice` to
+resolve a visit's invoice or 404, `POST /invoices/{invoice_id}/payments` to capture a payment,
+`GET /invoices/{invoice_id}`). Every invoice read carries its lines, its payments, and the derived
+`status` / `amount_paid` / `outstanding`.
+
+The **billing UI (5.4)** is the first Phase-5 frontend: `frontend/app/invoices/new/[visitId]` (generate
+from a visit — seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take
+payment), and `/invoices/[id]/receipt` (a print view; `window.print()` + a `.no-print` class and an
+`@media print` rule in `globals.css` — no PDF library). It's reached from each visit on the patient
+profile via `GET /visits/{visit_id}/invoice`. The hooks live in `frontend/lib/use-invoices.ts`; money is
+formatted with `Intl.NumberFormat` on the decimal string, never float arithmetic (the 4.1 rule).
 
 `app/routers/treatments.py` reads (4.4) require `patient_id` — an unfiltered list of every treatment
 in the clinic isn't a screen anyone has — and are ordered **open-first, then newest**, because every

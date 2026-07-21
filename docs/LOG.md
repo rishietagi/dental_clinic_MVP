@@ -15,7 +15,7 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–4 are COMPLETE. PHASE 5 (billing) is IN PROGRESS — 5.1–5.3 done, next is 5.4.**
+**Where we are: Phases 0–4 are COMPLETE. PHASE 5 (billing) is IN PROGRESS — 5.1–5.4 done, next is 5.5.**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -29,20 +29,30 @@ full plan and roadmap), then this file (what actually happened).
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs:**
-- **Migration head = `800a7987a8ee`** (the **tenth** migration, `add billing models`, 5.1).
+- **Migration head = `e8dbf0db4dec`** (the **eleventh** migration, `add clinic identity fields`, 5.4).
 - **Twelve models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
   `payment`. All three billing models now have behaviour: generation (5.2) + payment capture (5.3).
 - **Six `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`.
-- **182 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **189 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **`clinic_settings` now carries identity** (`clinic_name` NOT NULL default 'Dental Clinic', nullable
+  `address`/`phone`) — printed on the receipt, editable on `/settings/clinic`.
+- **Billing UI exists** (5.4): `/invoices/new/[visitId]` (generate), `/invoices/[id]` (view + take
+  payment), `/invoices/[id]/receipt` (print via `window.print()` + a `.no-print`/`@media print` rule in
+  `globals.css`). Reached from each visit on the patient profile. `frontend/lib/use-invoices.ts` is the
+  hook module; `formatMoney` uses `Intl.NumberFormat` on the decimal string (never float math).
 - **Time is now clinic-zone, not UTC** — `list_appointments` uses `services/clinic.clinic_day_bounds`;
   the frontend renders via `date-fns-tz` reading `clinic_settings.timezone`. The old UTC caveat is gone.
 
-**Phase 5 roadmap (BUILD_PLAN §10):** ~~5.1 models~~ · ~~5.2 generation~~ · ~~5.3 payment capture~~
-**ALL DONE** · **5.4 (NEXT) printable receipt** · 5.5 dashboard: today's collections. Money stays
-`Numeric`/`Decimal`, never float (the 4.1 rule). An `INVOICE` is **per-visit** (ERD §9), UNIQUE on
-`invoice.visit_id`.
+**Phase 5 roadmap (BUILD_PLAN §10):** ~~5.1 models~~ · ~~5.2 generation~~ · ~~5.3 payment capture~~ ·
+~~5.4 billing UI + printable receipt~~ **ALL DONE** · **5.5 (NEXT) dashboard: today's collections**.
+Money stays `Numeric`/`Decimal`, never float (the 4.1 rule). An `INVOICE` is **per-visit** (ERD §9),
+UNIQUE on `invoice.visit_id`.
+**For 5.5 (today's collections):** sum the day's `payment.amount` (by `paid_at` in the clinic zone —
+reuse `services/clinic.clinic_day_bounds`, the 4.9 helper) and surface it on the dashboard (`/`), likely
+a new clinic-wide read like the 4.8 needs-follow-up report. Decide the breakdown with the user (total
+only? by mode?).
 **Generation (5.2):** `POST /visits/{visit_id}/invoice` freezes procedure lines (name + `default_price`)
 + optional `extra_lines`, minus discount → `total`. **Payment capture (5.3):**
 `POST /invoices/{id}/payments` (`{amount, mode}`, `mode` a `Literal[cash,card,upi]`); `invoice.status`
@@ -239,6 +249,7 @@ the original step instructions say otherwise:
 | **Invoice is one-per-visit (UNIQUE) + the line freezes its price (5.1)** | ERD draws plain FKs | `invoice.visit_id` is a NOT NULL FK with a **UNIQUE** constraint — a second invoice for the same visit is impossible at the DB (ERD §9: per-visit), the same "DB is the guarantee" instinct as the appointment overlap constraint. **`invoice_line` snapshots `description` + `amount`**, frozen at generation (5.2); `treatment_item_id` is a **nullable** reporting-only link. This is the answer to the deferred price-snapshot question — an old invoice reads at the price charged then, not today's. So **5.2 must COPY name+price from `treatment_item` into the line**, not read it live. `payment` is a separate table (an invoice takes several part-payments). Statuses (`invoice.status`, `payment.mode`) are **app-level, no DB enum** — pinned via Pydantic `Literal` in 5.3. Money CHECKs (non-neg, `discount<=subtotal`) are hand-added in the migration (autogenerate emits none). | `backend/app/models/invoice.py`, `backend/app/models/invoice_line.py`, `backend/app/models/payment.py` |
 | **Invoice generation = `POST /visits/{id}/invoice`, server builds lines, biller may add custom ones (5.2)** | Roadmap says only "generate from visit procedures" | The **trigger hangs off the visit** but the resource is the invoice, so it lives on its own **`invoices` router** (no prefix; POST path `/visits/{visit_id}/invoice`, GET `/invoices/{id}`) + a **`billing` service** (6th module) that payments (5.3) + receipt (5.4) extend. Lines = **auto-seeded from the visit's `procedure_performed` rows** (name + current `default_price` COPIED in, frozen) **++ optional biller-typed `extra_lines`** (description + amount, `treatment_item_id` NULL). So a walk-in with zero recorded procedures can still be billed by hand — only a **totally empty** invoice (0 procedures AND 0 custom lines) is a **422**. Re-generate → **409** (friendly pre-check + IntegrityError backstop on the UNIQUE). **Any active staff** (billing is front-desk, NOT dentist-role-split — a test asserts a receptionist can generate). `billing.py` raises domain exceptions (`VisitNotFound`/`InvoiceAlreadyExists`/`NothingToInvoice`/`DiscountExceedsSubtotal`), router maps to HTTP + audits + commits (the 4.3 house pattern). No migration — 5.1's tables suffice. | `backend/app/routers/invoices.py`, `backend/app/services/billing.py`, `backend/app/schemas/invoice.py` |
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
+| **Billing UI + receipt (5.4): clinic identity on `clinic_settings`, print via `window.print()`** | Roadmap says only "printable receipt" | A receipt needs an invoice to exist, and there was **no billing UI** (5.2/5.3 were API-only) — so 5.4 built the whole flow: `/invoices/new/[visitId]` (generate: seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take payment), `/invoices/[id]/receipt` (print). Reached from **each visit row on the patient profile** via **`GET /visits/{visit_id}/invoice`** (new read, 404 = "no invoice yet" → "Generate" vs "View"; reuses the UNIQUE, no visit column added). **Clinic identity lives on `clinic_settings`** (`clinic_name` NOT NULL default 'Dental Clinic', nullable `address`/`phone`; migration `e8dbf0db4dec`, the 11th — autogenerated, the NOT NULL default backfills the singleton) — edited on `/settings/clinic`, printed on the receipt header. **Print = `window.print()` + a `.no-print` class + `@media print` in `globals.css`** — NO PDF lib, no new dep. `frontend/lib/use-invoices.ts` mirrors `use-visits.ts`; `formatMoney` = `Intl.NumberFormat("en-IN", INR)` on the decimal **string** (never float). Billing UI is **any-staff** (no role gate — the API is the guard). Added `useVisit` to `use-visits.ts`. | `frontend/lib/use-invoices.ts`, `frontend/app/invoices/`, `backend/app/models/clinic_settings.py`, `backend/app/routers/invoices.py` |
 | **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
 | **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
@@ -256,6 +267,80 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 5.4: billing UI + printable receipt
+
+**Status:** complete — the **first billing UI** (generate → pay → print) + clinic identity on
+`clinic_settings` + a new invoice-by-visit read, verified (189 backend tests pass; frontend lint +
+build green; full stack up). **First Phase-5 step with a frontend.** For commit.
+
+### Why this step
+5.2/5.3 built the invoice + payment APIs but **no browser could reach them**. 5.4 is the roadmap's
+"printable receipt," but a receipt needs an invoice — so this delivers the whole flow end to end, and
+fills the gap that the receipt header needs the clinic's identity (which `clinic_settings` didn't have).
+
+### Scope decisions (confirmed with user)
+- **Full billing UI + receipt** (not receipt-only).
+- **Clinic identity → `clinic_settings`**: `clinic_name` (NOT NULL, default 'Dental Clinic'), `address`,
+  `phone` (nullable), editable on `/settings/clinic`, shown on the receipt.
+- **Print = `window.print()` + `@media print`** — no PDF lib, no new dep.
+- **Entry point:** each visit row on the patient profile — "Generate invoice" (none yet) or status +
+  "View invoice".
+- **Screens:** generate at `/invoices/new/[visitId]`, invoice at `/invoices/[id]`, receipt at
+  `/invoices/[id]/receipt`. Invoice id in the path, never a patient id.
+- **Discount + custom lines set on the generate step** (the invoice is fixed after creation).
+
+### Built — backend (migration 11)
+- `clinic_settings` model + schema — `clinic_name`/`address`/`phone`. Migration `e8dbf0db4dec`
+  (autogenerated; the NOT NULL default backfills the singleton; downgrade + re-upgrade verified).
+- `GET /visits/{visit_id}/invoice` (`routers/invoices.py` + `billing.get_invoice_by_visit`) — the
+  invoice for a visit or 404. Lets the profile resolve billing state per visit with no new column.
+- Tests: invoice-by-visit (200/404/404), clinic identity (GET fields, admin PATCH, blank name 422,
+  receptionist 403), and the settings fixture now restores identity too. 182 → **189**.
+
+### Built — frontend
+- `lib/use-invoices.ts` (**new**) — `useInvoice`, `useVisitInvoice` (404→"none"), `generateInvoice`,
+  `recordPayment`, `formatMoney` (`Intl.NumberFormat` en-IN INR on the decimal string), `statusLabel`.
+- `lib/use-visits.ts` — added `useVisit(id)`. `lib/use-clinic-settings.ts` — identity fields + defaults.
+- `app/invoices/new/[visitId]/` — generate screen: lists the visit's procedures (billed at current
+  catalogue price server-side), discount input, custom-line repeater → creates → routes to the invoice.
+  Handles 409 (already invoiced) + 422 inline.
+- `app/invoices/[id]/` — invoice view: lines, totals, status, balance, payments, a record-payment form
+  (amount + mode cash/card/upi), "Print receipt" link. Hides the pay form once `paid`.
+- `app/invoices/[id]/receipt/` — print view: clinic header from settings, receipt #, date, patient,
+  lines, totals, payments, balance, status; **Print** button (`window.print()`); controls wrapped in
+  `.no-print`.
+- `app/globals.css` — `.no-print` + `@media print` (hide chrome, force black-on-white).
+- `patient-profile.tsx` — `VisitBilling` per visit row (Generate / View + status). No role gate —
+  billing is front-desk.
+- `settings/clinic/clinic-settings-form.tsx` — identity fields in both the admin form + read-only view.
+
+### One dep? No. One migration (the 11th, clinic identity)
+`window.print()` + `Intl.NumberFormat` are built-in. No PDF library.
+
+### Verified
+- **189 backend tests pass** in-container; migration applies + reverses + re-applies; `\d
+  clinic_settings` shows the 3 columns + the backfilled row; `GET /visits/{id}/invoice` live (401 unauth).
+- Frontend **`lint` + `build` green** — all three `/invoices/*` routes register, TypeScript passes;
+  **frontend Docker image rebuilt**; **full stack up** and reachable through Caddy (`/` → 307 → login).
+
+### What was NOT browser-clicked (honest note)
+This is the first Phase-5 UI. The backend is API-proven (tests + live), and the frontend
+type-checks + builds + routes register — but the **actual browser click-through is the user's**
+(auth is real in the browser; I can't sign in as a real Supabase user here). **Handed to the user:**
+generate an invoice from a visit → record a part payment → watch status go partially_paid → pay the
+rest → paid → open the receipt and confirm `window.print()` shows only the receipt (nav/buttons hidden).
+Also worth setting the clinic name/address on `/settings/clinic` and confirming it appears on the receipt.
+
+### Carried forward → 5.5
+Today's collections on the dashboard: sum the day's `payment.amount` by `paid_at` **in the clinic zone**
+(reuse `services/clinic.clinic_day_bounds`). Likely a new clinic-wide read (like 4.8). Decide the
+breakdown (total vs. by mode) with the user.
+
+### Suggested commit
+`feat: add printable receipts`
 
 ---
 

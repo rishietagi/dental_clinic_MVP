@@ -5,8 +5,8 @@ is a **singleton table**: one row, pinned to `id = 1` by a CHECK constraint. Tha
 is the simplest possible "there can be only one" guarantee — every reader does
 `db.get(ClinicSettings, 1)` and every write targets that row.
 
-It holds the two things that were hardcoded through Phase 3–4 and are now
-configurable:
+It holds the things that were hardcoded through Phase 3–4 and are now
+configurable, plus the clinic's own identity:
 
 - **Clinic hours + slot size** (`open_hour`, `close_hour`, `slot_minutes`) — the
   week-view calendar grid and the visit form's follow-up duration read these
@@ -15,6 +15,9 @@ configurable:
   one. The appointments day/range query bounds "a day" in this zone (not UTC),
   and the frontend renders times in it. Before this, "a day" was a UTC day; an
   IST evening slot could fall on the wrong UTC date.
+- **Identity** (`clinic_name`, `address`, `phone`, added in 5.4) — printed on the
+  receipt header. `clinic_name` is NOT NULL with a placeholder default so the
+  singleton row always has one; address/phone are optional.
 
 The CHECK constraints (`id = 1`, `close_hour > open_hour`, sane ranges) are added
 by hand in the migration — Alembic autogenerate doesn't emit them.
@@ -51,6 +54,14 @@ class ClinicSettings(Base):
     timezone: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="Asia/Kolkata"
     )
+
+    # Clinic identity, printed on the receipt header (5.4). NOT NULL with a
+    # placeholder default so the singleton always has a name; the rest optional.
+    clinic_name: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="Dental Clinic"
+    )
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),

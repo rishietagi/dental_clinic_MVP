@@ -135,6 +135,54 @@ export function usePatientVisits(
   return { ...state, refetch };
 }
 
+// One visit by id (GET /visits/{id}), including its procedures + treatment. Used
+// by the invoice-generate screen (5.4) to show what will be billed, and by the
+// receipt to name the treatment/date. Same discriminated-state shape as usePatient.
+type VisitState =
+  | { kind: "loading" }
+  | { kind: "ready"; visit: Visit }
+  | { kind: "not-found" }
+  | { kind: "error"; message: string };
+
+export function useVisit(visitId: string): VisitState {
+  const [state, setState] = useState<VisitState>(
+    apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
+  );
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const headers = await authHeaders();
+        if (!headers) throw new Error("Not signed in.");
+
+        const res = await fetch(`${apiUrl}/visits/${visitId}`, { headers });
+        if (res.status === 404) {
+          if (!cancelled) setState({ kind: "not-found" });
+          return;
+        }
+        if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+
+        const visit = (await res.json()) as Visit;
+        if (!cancelled) setState({ kind: "ready", visit });
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Could not load the visit.";
+          setState({ kind: "error", message });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visitId]);
+
+  return state;
+}
+
 // recordVisit returns the CREATED visit on success, not just "ok" — the inline
 // follow-up (4.6) needs the visit's treatment_id, and a first visit auto-creates
 // its treatment server-side, so the id isn't known until the response. The

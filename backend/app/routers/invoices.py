@@ -47,6 +47,7 @@ from app.services.billing import (
     NothingToInvoice,
     VisitNotFound,
     generate_invoice,
+    get_invoice_by_visit,
     invoice_balances,
     record_payment,
 )
@@ -152,6 +153,26 @@ def create_invoice(
         ) from exc
 
     db.refresh(invoice)
+    return _to_read(db, invoice)
+
+
+@router.get("/visits/{visit_id}/invoice", response_model=InvoiceRead)
+def get_invoice_for_visit(
+    visit_id: UUID,
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> InvoiceRead:
+    """The invoice for a visit — 404 if it hasn't been generated yet.
+
+    The patient profile calls this per visit to show 'Generate invoice' (404) vs a
+    status badge + 'View invoice' (200).
+    """
+    invoice = get_invoice_by_visit(db, visit_id)
+    if invoice is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No invoice for this visit yet.",
+        )
     return _to_read(db, invoice)
 
 

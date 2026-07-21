@@ -79,6 +79,7 @@ def env(db_available):
         db.expire_all()
         r = db.get(ClinicSettings, 1)
         r.open_hour, r.close_hour, r.slot_minutes, r.timezone = 9, 18, 30, "Asia/Kolkata"
+        r.clinic_name, r.address, r.phone = "Dental Clinic", None, None
         db.commit()
 
     reset_to_seed()
@@ -186,3 +187,47 @@ def test_empty_patch_is_a_noop(env):
     resp = client.patch("/clinic-settings", json={})
     assert resp.status_code == 200
     assert resp.json()["open_hour"] == before["open_hour"]
+
+
+# --- clinic identity fields (5.4) --------------------------------------------
+
+def test_get_returns_identity_fields(env):
+    client, _admin, _recep, _ = env
+    data = client.get("/clinic-settings").json()
+    assert data["clinic_name"] == "Dental Clinic"  # seeded default
+    assert data["address"] is None
+    assert data["phone"] is None
+
+
+def test_admin_can_patch_identity(env):
+    client, _admin, _recep, _ = env
+    resp = client.patch(
+        "/clinic-settings",
+        json={
+            "clinic_name": "Sri Dental Care",
+            "address": "12 MG Road, Davangere",
+            "phone": "+91 90000 00000",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["clinic_name"] == "Sri Dental Care"
+    assert data["address"] == "12 MG Road, Davangere"
+    assert data["phone"] == "+91 90000 00000"
+    # Persisted.
+    assert client.get("/clinic-settings").json()["clinic_name"] == "Sri Dental Care"
+
+
+def test_blank_clinic_name_is_422(env):
+    client, _admin, _recep, _ = env
+    assert client.patch(
+        "/clinic-settings", json={"clinic_name": ""}
+    ).status_code == 422
+
+
+def test_receptionist_cannot_patch_identity(env):
+    client, _admin, recep, act_as = env
+    act_as(recep)
+    assert client.patch(
+        "/clinic-settings", json={"clinic_name": "Hacked"}
+    ).status_code == 403

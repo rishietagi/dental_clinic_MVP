@@ -128,3 +128,16 @@
     @apply font-sans;
   }
 }
+
+/* Print (5.4 receipt). Anything marked .no-print is hidden when printing — the
+   receipt route wraps its nav/buttons in it so only the receipt itself prints.
+   Force a plain black-on-white look so a themed background doesn't waste ink. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+}

@@ -54,7 +54,7 @@ export function ClinicSettingsForm() {
   // Local edit copy. Rather than sync it from settings in an effect (which
   // triggers cascading renders), we re-seed it *during render* when the fetched
   // values change identity — the React "adjust state while rendering" idiom.
-  const settingsKey = `${settings.open_hour}-${settings.close_hour}-${settings.slot_minutes}-${settings.timezone}`;
+  const settingsKey = `${settings.open_hour}-${settings.close_hour}-${settings.slot_minutes}-${settings.timezone}-${settings.clinic_name}-${settings.address ?? ""}-${settings.phone ?? ""}`;
   const [draft, setDraft] = useState<ClinicSettings>(settings);
   const [seededKey, setSeededKey] = useState(settingsKey);
   const [busy, setBusy] = useState(false);
@@ -78,12 +78,20 @@ export function ClinicSettingsForm() {
       return;
     }
 
+    if (current.clinic_name.trim() === "") {
+      setError("Clinic name can’t be empty.");
+      return;
+    }
+
     setBusy(true);
     const result = await updateClinicSettings({
       open_hour: current.open_hour,
       close_hour: current.close_hour,
       slot_minutes: current.slot_minutes,
       timezone: current.timezone,
+      clinic_name: current.clinic_name,
+      address: current.address,
+      phone: current.phone,
     });
     setBusy(false);
 
@@ -106,6 +114,12 @@ export function ClinicSettingsForm() {
   if (!isAdmin) {
     return (
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+        <dt className="text-muted-foreground">Clinic name</dt>
+        <dd>{settings.clinic_name}</dd>
+        <dt className="text-muted-foreground">Address</dt>
+        <dd>{settings.address || "—"}</dd>
+        <dt className="text-muted-foreground">Phone</dt>
+        <dd>{settings.phone || "—"}</dd>
         <dt className="text-muted-foreground">Hours</dt>
         <dd>
           {String(settings.open_hour).padStart(2, "0")}:00–
@@ -124,6 +138,30 @@ export function ClinicSettingsForm() {
 
   return (
     <form onSubmit={save} className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end gap-4">
+        <Field label="Clinic name">
+          <Input
+            value={current.clinic_name}
+            onChange={(e) => setDraft({ ...current, clinic_name: e.target.value })}
+            className="w-64"
+          />
+        </Field>
+        <Field label="Address">
+          <Input
+            value={current.address ?? ""}
+            onChange={(e) => setDraft({ ...current, address: e.target.value })}
+            className="w-80"
+          />
+        </Field>
+        <Field label="Phone">
+          <Input
+            value={current.phone ?? ""}
+            onChange={(e) => setDraft({ ...current, phone: e.target.value })}
+            className="w-48"
+          />
+        </Field>
+      </div>
+
       <div className="flex flex-wrap items-end gap-4">
         <Field label="Opens at">
           <select

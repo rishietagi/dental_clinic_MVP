@@ -21,6 +21,9 @@ export type ClinicSettings = {
   close_hour: number;
   slot_minutes: number;
   timezone: string;
+  clinic_name: string;
+  address: string | null;
+  phone: string | null;
 };
 
 // The historical hardcoded values — the fallback until the fetch resolves.
@@ -29,6 +32,9 @@ export const DEFAULT_CLINIC_SETTINGS: ClinicSettings = {
   close_hour: 18,
   slot_minutes: 30,
   timezone: "Asia/Kolkata",
+  clinic_name: "Dental Clinic",
+  address: null,
+  phone: null,
 };
 
 type State = "loading" | "ready" | "error";

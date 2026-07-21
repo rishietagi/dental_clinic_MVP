@@ -193,6 +193,16 @@ def invoice_balances(db: Session, invoice: Invoice) -> tuple[Decimal, Decimal]:
     return paid, outstanding.quantize(_CENTS)
 
 
+def get_invoice_by_visit(db: Session, visit_id: UUID) -> Invoice | None:
+    """The invoice for a visit, or None if it hasn't been generated yet.
+
+    Lets a caller (the patient profile, 5.4) resolve a visit's billing state —
+    "Generate invoice" vs "View invoice" — without a column on the visit. Cheap:
+    `invoice.visit_id` is UNIQUE, so this is at most one row.
+    """
+    return db.scalar(select(Invoice).where(Invoice.visit_id == visit_id))
+
+
 def record_payment(
     db: Session, *, invoice_id: UUID, amount: Decimal, mode: str
 ) -> Invoice:

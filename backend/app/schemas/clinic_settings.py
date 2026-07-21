@@ -34,6 +34,9 @@ class ClinicSettingsRead(BaseModel):
     close_hour: int
     slot_minutes: int
     timezone: str
+    clinic_name: str
+    address: str | None
+    phone: str | None
     updated_at: datetime
 
 
@@ -45,6 +48,11 @@ class ClinicSettingsUpdate(BaseModel):
     close_hour: int | None = Field(default=None, ge=1, le=24)
     slot_minutes: int | None = Field(default=None, gt=0)
     timezone: str | None = None
+    # Identity (5.4). clinic_name can't be blanked to empty if provided; address
+    # and phone are free text (empty string allowed — the biller may clear them).
+    clinic_name: str | None = Field(default=None, min_length=1)
+    address: str | None = None
+    phone: str | None = None
 
     @field_validator("timezone")
     @classmethod

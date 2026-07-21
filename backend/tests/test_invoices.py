@@ -462,3 +462,33 @@ def test_payment_writes_audit_row(as_receptionist):
     )
     assert row is not None
     assert row.action == "payment"
+
+
+# --- invoice-by-visit read (5.4) ---------------------------------------------
+
+def test_get_invoice_for_visit(as_receptionist):
+    """A visit that has an invoice resolves to it (same body as GET by id)."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+    gen = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert gen.status_code == 201
+    invoice_id = gen.json()["id"]
+
+    resp = ctx.client.get(f"/visits/{visit_id}/invoice")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == invoice_id
+    assert resp.json()["visit_id"] == visit_id
+
+
+def test_get_invoice_for_visit_without_one(as_receptionist):
+    """A visit with no invoice yet → 404 (the 'Generate invoice' state)."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+    resp = ctx.client.get(f"/visits/{visit_id}/invoice")
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_invoice_for_unknown_visit(as_receptionist):
+    ctx = as_receptionist
+    resp = ctx.client.get(f"/visits/{uuid.uuid4()}/invoice")
+    assert resp.status_code == 404

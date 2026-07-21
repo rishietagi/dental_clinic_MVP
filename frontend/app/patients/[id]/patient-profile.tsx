@@ -17,6 +17,7 @@ import { MedicalNotesBanner } from "@/components/medical-notes-banner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCurrentStaff } from "@/lib/use-current-staff";
+import { statusLabel, useVisitInvoice } from "@/lib/use-invoices";
 import { usePatient } from "@/lib/use-patient";
 import {
   closeTreatment,
@@ -334,7 +335,42 @@ function VisitRow({ visit }: { visit: Visit }) {
       {!hasContent && (
         <p className="text-sm text-muted-foreground">No notes recorded.</p>
       )}
+
+      <VisitBilling visit={visit} />
     </li>
+  );
+}
+
+// The per-visit billing control (5.4). Resolves whether the visit already has an
+// invoice: if not, a "Generate invoice" link to the generate screen; if so, its
+// status + a "View invoice" link. Billing is front-desk work, so there's no role
+// gate here (unlike "Record visit") — the API is the guard.
+function VisitBilling({ visit }: { visit: Visit }) {
+  const inv = useVisitInvoice(visit.id);
+
+  if (inv.kind === "loading") return null;
+  if (inv.kind === "error") {
+    return <p className="text-xs text-destructive">Billing: {inv.message}</p>;
+  }
+
+  if (inv.kind === "none") {
+    return (
+      <Link
+        href={`/invoices/new/${visit.id}`}
+        className={buttonVariants({ variant: "outline", size: "sm" }) + " mt-1 w-fit"}
+      >
+        Generate invoice
+      </Link>
+    );
+  }
+
+  return (
+    <div className="mt-1 flex items-center gap-2 text-xs">
+      <span className="text-muted-foreground">Invoice: {statusLabel(inv.invoice.status)}</span>
+      <Link href={`/invoices/${inv.invoice.id}`} className="underline">
+        View invoice
+      </Link>
+    </div>
   );
 }
 
