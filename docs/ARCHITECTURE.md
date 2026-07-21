@@ -159,9 +159,11 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 4.9 there are nine models — `staff_user`, `audit_log`, `patient`, `appointment`,
-`treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings` — and five
-`app/services/` modules (`audit`, `appointments`, `visits`, `treatments`, `clinic`).
+As of 5.1 there are twelve models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
+`invoice_line`, `payment` — and five `app/services/` modules (`audit`, `appointments`, `visits`,
+`treatments`, `clinic`). The three billing models (5.1) are schema-only so far — no service module
+or endpoints yet; invoice generation is 5.2, payment capture 5.3.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -249,6 +251,25 @@ API below).
   fix: `list_appointments` bounds "a day" in the clinic zone, so an IST-evening appointment (whose UTC
   date is the day before) lands on the correct clinic day. The overlap constraint and `find_conflicts`
   are untouched — they compare instants, which are zone-independent.
+- **`app/models/invoice.py`** — `Invoice`, the billing models' head (Phase 5, step 5.1). **One
+  invoice per visit** (ERD §9): `visit_id` is a NOT NULL FK with a **UNIQUE** constraint, so a second
+  invoice for the same visit is impossible at the DB. `patient_id` is denormalised from the visit
+  (billing-history-by-patient is a hot read). `subtotal` / `discount` / `total` are `Numeric(10,2)`
+  (the money-is-Decimal-never-float rule, 4.1); `status` is free-text (`unpaid` / `partially_paid` /
+  `paid`, default `unpaid`) with **no DB enum** — transitions get enforced in the service layer at
+  5.3, matching the appointment/treatment status precedent. The migration hand-adds two CHECKs:
+  amounts non-negative, and `discount <= subtotal`.
+- **`app/models/invoice_line.py`** — `InvoiceLine`, one row per charged procedure. It **snapshots**
+  what was charged: `description` (Text) and `amount` (`Numeric(10,2)`) are **frozen** at generation
+  time (5.2), copied from the catalogue rather than read live — so re-reading an old invoice shows the
+  price actually charged then, not today's. This is the deliberate answer to the price-snapshot
+  question deferred from 4.2. `treatment_item_id` is therefore a **nullable** FK, kept only as a
+  reporting link ("revenue by procedure"). A CHECK enforces `amount >= 0`.
+- **`app/models/payment.py`** — `Payment`, one row per payment against an invoice. An invoice may be
+  settled by **several** payments (part-payments), so this is a table, not a column on `invoice`;
+  summing them versus `total` drives status + outstanding balance (5.3). `amount` is `Numeric(10,2)`
+  (CHECK `>= 0`); `mode` (cash / card / upi) is free-text, pinned via a Pydantic `Literal` when the
+  payment API lands (5.3). No `relationship()` navigations on any of the three — house style.
 
 - **`app/services/visits.py`** — the **third `services/` module** (4.3). `resolve_treatment()` holds
   the auto-create/auto-close rule: given a `treatment_id` it validates the thread (404 missing / 409

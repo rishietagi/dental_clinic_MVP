@@ -15,7 +15,7 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–4 are COMPLETE. Next is PHASE 5 — billing (start at step 5.1).**
+**Where we are: Phases 0–4 are COMPLETE. PHASE 5 (billing) is IN PROGRESS — 5.1 done, next is 5.2.**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -29,20 +29,24 @@ full plan and roadmap), then this file (what actually happened).
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs:**
-- **Migration head = `1c72084fac9c`** (the **ninth** migration, `clinic_settings`, 4.9).
-- **Nine models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
-  `treatment`, `visit`, `procedure_performed`, `clinic_settings`.
+- **Migration head = `800a7987a8ee`** (the **tenth** migration, `add billing models`, 5.1).
+- **Twelve models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
+  `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
+  `payment`. The three billing models are **schema-only** so far — no service/endpoints (5.2/5.3).
 - **Five `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`.
-- **143 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **159 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
 - **Time is now clinic-zone, not UTC** — `list_appointments` uses `services/clinic.clinic_day_bounds`;
   the frontend renders via `date-fns-tz` reading `clinic_settings.timezone`. The old UTC caveat is gone.
 
-**Phase 5 roadmap (BUILD_PLAN §10):** 5.1 `invoice` + `invoice_line` + `payment` models · 5.2 invoice
-generation from a visit's procedures · 5.3 payment capture + outstanding balance · 5.4 printable
-receipt · 5.5 dashboard: today's collections. **Start at 5.1 (models + migration).** Money stays
-`Numeric`/`Decimal`, never float (the 4.1 rule — invoices are the reason it exists). An `INVOICE` is
-**per-visit**, not per-treatment (ERD §9). The open 5.2 question is whether a `procedure_performed`
-should have snapshotted its price — decide it in 5.2 (see the standing-decisions table).
+**Phase 5 roadmap (BUILD_PLAN §10):** ~~5.1 `invoice` + `invoice_line` + `payment` models~~ **DONE** ·
+**5.2 (NEXT) invoice generation from a visit's procedures** · 5.3 payment capture + outstanding
+balance · 5.4 printable receipt · 5.5 dashboard: today's collections. Money stays `Numeric`/`Decimal`,
+never float (the 4.1 rule — invoices are the reason it exists). An `INVOICE` is **per-visit**, not
+per-treatment (ERD §9), enforced by a UNIQUE on `invoice.visit_id`.
+**The price-snapshot question is ANSWERED (5.1): yes, freeze it.** `invoice_line` snapshots its own
+`description` + `amount` at generation time; `procedure_performed` still has no price column and never
+needs one — the invoice line is the record of what was charged. So **5.2's generation code must COPY
+name + price from `treatment_item` into the line**, not leave the line to read the catalogue live.
 
 **OPEN ITEMS** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
@@ -50,7 +54,7 @@ should have snapshotted its price — decide it in 5.2 (see the standing-decisio
 | ~~Clinic hours + slot size hardcoded~~ | **DONE in 4.9** — from `clinic_settings` via `useClinicSettings`; `week.ts` constants are now just fallbacks. | — |
 | ~~No clinic timezone~~ | **DONE in 4.9** — day bounds are clinic-zone (`clinic_day_bounds`), UI renders in the clinic zone via `date-fns-tz`. | — |
 | **No appointment seed script** | Only `app.seed` (admin) + `app.seed_patients` exist. Demo appointments have been created ad hoc. Would help exercise the calendar/dashboard with data. | `backend/app/` |
-| **Price snapshot question (→ 5.2)** | `procedure_performed` has **no price column**. 5.2 must decide whether an invoice line snapshots the price at the time of the procedure, so re-reading an old visit doesn't show today's price. Raised in 4.2, answered in Phase 5. | `backend/app/models/procedure_performed.py` |
+| ~~Price snapshot question (→ 5.2)~~ | **ANSWERED in 5.1: freeze it.** `invoice_line.description` + `amount` are snapshotted at generation; `procedure_performed` keeps no price column. 5.2's generation must COPY name+price from `treatment_item` into the line. | `backend/app/models/invoice_line.py` |
 
 **Treatment catalogue (4.1):** `treatment_item` = flat `name` (unique) + `default_price` + `active`.
 **`GET /treatment-items`** (+ `?include_inactive=`) and `GET /{id}` are **any active staff**;
@@ -225,7 +229,8 @@ the original step instructions say otherwise:
 | **Second role-split resource: visits are dentist-write** | Phases 2–3 let any active staff do everything | Visit writes are `require_role("dentist","admin")`; reads stay `get_current_staff`. BUILD_PLAN §2 gives "record visits/treatments" to the Dentist — clinical notes are the dentist's record — while the receptionist still needs visit history for billing (5.2) and follow-ups. A test asserts a receptionist gets **403** on POST/PATCH but **200** on GET. | `backend/app/routers/visits.py` |
 | **Services raise domain exceptions, not HTTPException** | — | `services/visits.py` raises `TreatmentNotFound` / `TreatmentPatientMismatch` / `TreatmentAlreadyClosed`; the router maps them to 404/409/409. Keeps the rule unit-testable without HTTP and leaves status codes in one place. Follow this for future service modules. | `backend/app/services/visits.py` |
 | **Autogenerated FK constraints need a name by hand** | — | `op.create_foreign_key(None, ...)` upgrades fine (Postgres invents a name) but the paired `op.drop_constraint(None, ...)` **cannot drop an unnamed constraint** — the downgrade fails and the migration is silently irreversible. Hit in `999215bea700`; fixed by naming it `appointment_treatment_id_fkey`. **Always test the downgrade.** | `backend/alembic/versions/999215bea700_*.py` |
-| **Money is `Numeric`, NEVER float** | — | `treatment_item.default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in Python/Pydantic — the project's first money column (4.1). Binary floating point can't represent decimal currency exactly, and a rounding error in an invoice is a real bug. **Phase 5's invoice/payment columns must follow the same rule.** Prices cross the wire as strings so the exact decimal survives; the frontend formats with `Intl.NumberFormat` and never does float arithmetic on them. | `backend/app/models/treatment_item.py` |
+| **Money is `Numeric`, NEVER float** | — | `treatment_item.default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in Python/Pydantic — the project's first money column (4.1). Binary floating point can't represent decimal currency exactly, and a rounding error in an invoice is a real bug. **Phase 5's invoice/payment columns follow the same rule** (`subtotal`/`discount`/`total`/`amount` all `Numeric(10,2)`, 5.1). Prices cross the wire as strings so the exact decimal survives; the frontend formats with `Intl.NumberFormat` and never does float arithmetic on them. | `backend/app/models/treatment_item.py`, `backend/app/models/invoice.py` |
+| **Invoice is one-per-visit (UNIQUE) + the line freezes its price (5.1)** | ERD draws plain FKs | `invoice.visit_id` is a NOT NULL FK with a **UNIQUE** constraint — a second invoice for the same visit is impossible at the DB (ERD §9: per-visit), the same "DB is the guarantee" instinct as the appointment overlap constraint. **`invoice_line` snapshots `description` + `amount`**, frozen at generation (5.2); `treatment_item_id` is a **nullable** reporting-only link. This is the answer to the deferred price-snapshot question — an old invoice reads at the price charged then, not today's. So **5.2 must COPY name+price from `treatment_item` into the line**, not read it live. `payment` is a separate table (an invoice takes several part-payments). Statuses (`invoice.status`, `payment.mode`) are **app-level, no DB enum** — pinned via Pydantic `Literal` in 5.3. Money CHECKs (non-neg, `discount<=subtotal`) are hand-added in the migration (autogenerate emits none). | `backend/app/models/invoice.py`, `backend/app/models/invoice_line.py`, `backend/app/models/payment.py` |
 | **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
 | **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
@@ -243,6 +248,80 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 5.1: billing models — invoice + invoice_line + payment
+
+**Status:** complete — three ORM models + the tenth migration + model-level tests, verified (159
+backend tests pass; migration applies, **reverses, and re-applies**; `\d` shows the schema exactly as
+designed). **Models + migration ONLY** — no service, no endpoints, no schemas, no frontend (those are
+5.2–5.5). For commit. Opens Phase 5 (billing).
+
+### Why this step
+BUILD_PLAN §10 starts billing with the data model. An `INVOICE` is per-visit (ERD §9); money is
+`Numeric`/`Decimal` (the 4.1 rule — invoices are the reason it exists). This step lays the three
+tables so 5.2 (generation) and 5.3 (payment capture) have something to write to.
+
+### Scope decisions (confirmed with user, all the recommended option)
+- **Price snapshot: freeze it.** `invoice_line` carries its own `description` (Text) + `amount`
+  (Numeric), copied from the catalogue at generation (5.2); `treatment_item_id` is a **nullable**
+  reporting-only link. Re-reading an old invoice shows the price charged then. This **answers the
+  question deferred from 4.2** — `procedure_performed` keeps no price column, ever.
+- **Statuses are app-level, no DB enum.** `invoice.status` is free-text (default `unpaid`), no CHECK
+  — transitions enforced in the service layer at 5.3 (same as appointment/treatment status).
+- **Hand-added money CHECKs** (non-negativity + `discount <= subtotal`). Autogenerate emits none.
+- **`payment.mode` free-text**, pinned via a Pydantic `Literal` when the API lands (5.3).
+
+### Built — backend
+- `app/models/invoice.py` — `Invoice`. `patient_id` FK NOT NULL (indexed, denormalised),
+  `visit_id` FK NOT NULL **UNIQUE** (one-per-visit), `subtotal`/`discount`/`total` `Numeric(10,2)`
+  default 0, `status` Text default `unpaid`, `created_at`/`updated_at`.
+- `app/models/invoice_line.py` — `InvoiceLine`. `invoice_id` FK NOT NULL (indexed),
+  `treatment_item_id` FK **nullable**, `description` Text NOT NULL (frozen), `amount` `Numeric(10,2)`
+  NOT NULL (frozen).
+- `app/models/payment.py` — `Payment`. `invoice_id` FK NOT NULL (indexed), `amount` `Numeric(10,2)`,
+  `mode` Text, `paid_at` timestamptz default now(). Several payments per invoice (part-payments).
+- All three registered in `app/models/__init__.py`. No `relationship()` navigations — house style.
+- `alembic/versions/800a7987a8ee_add_billing_models.py` — the **tenth** migration,
+  `down_revision = 1c72084fac9c`. Autogenerated (it detected all three tables + the three indexes),
+  then hand-edited to add the four named CHECKs — `invoice_amounts_nonneg`,
+  `invoice_discount_le_subtotal`, `invoice_line_amount_nonneg`, `payment_amount_nonneg`. The
+  autogenerated FKs/UNIQUE stayed inline in the `create_table` calls, and `downgrade()` already drops
+  the tables child-first (payment → invoice_line → invoice), so the constraints drop with their
+  tables — no standalone `op.drop_constraint(None, …)` (the `999215bea700` irreversibility trap
+  avoided). **Downgrade + re-upgrade verified.**
+- `tests/test_billing_models.py` (**new**, 16 tests) — same DB-skip + child-first-cleanup harness as
+  `test_treatment_models.py`. Covers: tables/columns exist · FKs · nullability (line's
+  `treatment_item_id` nullable) · **one-invoice-per-visit** (UNIQUE blocks the 2nd) · invoice
+  defaults · **line freezes description+amount** even after the item is renamed/repriced · nullable
+  item link persists · invoice/line/payment FK enforcement · **multiple part-payments per invoice** ·
+  money round-trips as exact `Decimal` · and the **four CHECKs** each reject a bad write (negative
+  subtotal, `discount>subtotal`, negative line amount, negative payment). 143 → **159**.
+
+### No new deps / service / endpoint / frontend / env / CI
+`Numeric`/`ForeignKey`/`Text`/`TIMESTAMP` were all already in use. The three models are schema-only —
+generation is 5.2, payment capture 5.3.
+
+### Verified
+- Migration: rebuilt the backend image (stale-image gotcha) → `alembic upgrade head`; `\d invoice`,
+  `\d invoice_line`, `\d payment` show every column, FK, the `visit_id` UNIQUE, and all four CHECKs.
+  **Downgraded one (tables gone) and re-upgraded** — reversible.
+- **159 backend tests pass** in-container against the compose Postgres. The suite *is* the live proof:
+  it exercises the UNIQUE, the frozen line, part-payments, and every CHECK against the real DB — so a
+  separate throwaway insert would have been redundant and was skipped (honest note).
+
+### What was NOT done (by design — it's a models step)
+No invoice-generation logic, no totals computation, no payment/invoice endpoints, no Pydantic schemas,
+no frontend. Nothing to click. All of that is 5.2–5.5.
+
+### Carried forward → 5.2
+Generate an invoice from a visit's `procedure_performed` rows: **copy each item's name + current
+`default_price` into a frozen `invoice_line`** (the snapshot rule), sum to `subtotal`, apply a
+discount, set `total`. That's the first billing service module + endpoint.
+
+### Suggested commit
+`feat: add billing models`
 
 ---
 
