@@ -15,7 +15,7 @@ generation (the 5.1 decision), so re-reading an old invoice shows what was charg
 then, not today's catalogue price.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -126,3 +126,17 @@ class InvoiceRead(BaseModel):
 
     lines: list[InvoiceLineRead]
     payments: list[PaymentRead]
+
+
+class CollectionsRead(BaseModel):
+    """Today's collections for the dashboard (5.5).
+
+    `date` is the clinic-local calendar day the figures cover. `total` and each
+    `by_mode` value are Decimal (serialized as strings). `by_mode` always carries
+    every payment mode (0.00 if none taken), so the card's layout is stable.
+    """
+
+    date: date
+    total: Decimal
+    count: int
+    by_mode: dict[str, Decimal]

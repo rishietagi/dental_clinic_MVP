@@ -28,3 +28,4 @@ from app.models.clinic_settings import ClinicSettings  # noqa: E402,F401
 from app.models.invoice import Invoice  # noqa: E402,F401
 from app.models.invoice_line import InvoiceLine  # noqa: E402,F401
 from app.models.payment import Payment  # noqa: E402,F401
+from app.models.patient_file import PatientFile  # noqa: E402,F401

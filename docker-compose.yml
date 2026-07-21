@@ -34,11 +34,17 @@ services:
       # Supabase project URL — the backend derives the JWKS URL + issuer from it
       # to verify access tokens. Same value as NEXT_PUBLIC_SUPABASE_URL.
       SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      # Where uploaded patient files are stored (5.6). A named volume in dev;
+      # Phase 7 swaps the storage backend (cloud) by config, not architecture.
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-15728640}
     # --reload for local dev; the image's default CMD omits it.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       # Bind-mount source so edits hot-reload. Not baked into the prod image.
       - ./backend/app:/app/app
+      # Uploaded files persist here, separate from the DB. Local dev only.
+      - uploads:/data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -69,3 +75,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

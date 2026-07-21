@@ -15,7 +15,8 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–4 are COMPLETE. PHASE 5 (billing) is IN PROGRESS — 5.1–5.4 done, next is 5.5.**
+**Where we are: Phases 0–5 COMPLETE + the 5.6 interlude (patient file uploads) is done. Next is
+PHASE 6 — reports & local polish (start at 6.1).**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -29,30 +30,45 @@ full plan and roadmap), then this file (what actually happened).
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs:**
-- **Migration head = `e8dbf0db4dec`** (the **eleventh** migration, `add clinic identity fields`, 5.4).
-- **Twelve models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
+- **Migration head = `deae87a07c3c`** (the **twelfth** migration, `add patient_file`, 5.6).
+- **Thirteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
-  `payment`. All three billing models now have behaviour: generation (5.2) + payment capture (5.3).
-- **Six `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
-  `billing`.
-- **189 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+  `payment`, `patient_file`.
+- **Seven `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
+  `billing`, `storage`.
+- **207 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **New backend dep `python-multipart`** (5.6, for FastAPI file uploads). **Uploaded files live on a
+  Docker named volume `uploads` at `UPLOAD_DIR=/data/uploads`** — NOT in Postgres; the DB keeps
+  metadata + a `storage_key`. Storage goes through `services/storage.py` (`Storage` protocol +
+  `LocalStorage`) so Phase 7 swaps in cloud storage by config.
+- **Patient file uploads exist** (5.6): `POST /patients/{id}/files` (multipart, **dentist/admin**),
+  `GET /patients/{id}/files` (list, any staff), `GET /files/{id}/content` (stream bytes, any staff),
+  `POST /files/{id}/archive` (soft-delete, dentist/admin). Frontend: a **Files & X-rays** section on the
+  patient profile (`patient-files-section.tsx` + `lib/use-patient-files.ts`); images preview via
+  authorized blob fetch, docs download. **Charting/odontogram is STILL out of scope** — this is opaque
+  file storage only.
 - **`clinic_settings` now carries identity** (`clinic_name` NOT NULL default 'Dental Clinic', nullable
   `address`/`phone`) — printed on the receipt, editable on `/settings/clinic`.
 - **Billing UI exists** (5.4): `/invoices/new/[visitId]` (generate), `/invoices/[id]` (view + take
   payment), `/invoices/[id]/receipt` (print via `window.print()` + a `.no-print`/`@media print` rule in
   `globals.css`). Reached from each visit on the patient profile. `frontend/lib/use-invoices.ts` is the
   hook module; `formatMoney` uses `Intl.NumberFormat` on the decimal string (never float math).
+- **Today's collections on the dashboard** (5.5): `GET /invoices/collections` (any active staff) sums
+  the day's `payment.amount` in the **clinic zone** (`billing.todays_collections` via `clinic_day_bounds`)
+  → `{date, total, count, by_mode:{cash,card,upi}}`; rendered by `app/todays-collections.tsx` on `/`.
+  **PHASE 5 IS COMPLETE.**
 - **Time is now clinic-zone, not UTC** — `list_appointments` uses `services/clinic.clinic_day_bounds`;
   the frontend renders via `date-fns-tz` reading `clinic_settings.timezone`. The old UTC caveat is gone.
 
-**Phase 5 roadmap (BUILD_PLAN §10):** ~~5.1 models~~ · ~~5.2 generation~~ · ~~5.3 payment capture~~ ·
-~~5.4 billing UI + printable receipt~~ **ALL DONE** · **5.5 (NEXT) dashboard: today's collections**.
-Money stays `Numeric`/`Decimal`, never float (the 4.1 rule). An `INVOICE` is **per-visit** (ERD §9),
-UNIQUE on `invoice.visit_id`.
-**For 5.5 (today's collections):** sum the day's `payment.amount` (by `paid_at` in the clinic zone —
-reuse `services/clinic.clinic_day_bounds`, the 4.9 helper) and surface it on the dashboard (`/`), likely
-a new clinic-wide read like the 4.8 needs-follow-up report. Decide the breakdown with the user (total
-only? by mode?).
+**Phase 5 (billing) is COMPLETE:** ~~5.1 models~~ · ~~5.2 generation~~ · ~~5.3 payment capture~~ ·
+~~5.4 billing UI + printable receipt~~ · ~~5.5 today's collections~~. Money stays `Numeric`/`Decimal`,
+never float (the 4.1 rule). An `INVOICE` is **per-visit** (ERD §9), UNIQUE on `invoice.visit_id`.
+
+**Next: PHASE 6 — reports & local polish (BUILD_PLAN §10).** 6.1 reports (revenue trend, procedure mix,
+no-show rate — an Admin `/reports` screen, BUILD_PLAN §6) · 6.2 error/loading/empty states (the deferred
+visual-polish pass — see [[defer-visual-polish-to-phase-6]]) · 6.3 demo to the user + fix feedback. Much
+of 6.1's data is now reachable (payments for revenue, `procedure_performed`/`invoice_line` for procedure
+mix, appointment status for no-show rate). **Still local-only — no deploy config until Phase 7.**
 **Generation (5.2):** `POST /visits/{visit_id}/invoice` freezes procedure lines (name + `default_price`)
 + optional `extra_lines`, minus discount → `total`. **Payment capture (5.3):**
 `POST /invoices/{id}/payments` (`{amount, mode}`, `mode` a `Literal[cash,card,upi]`); `invoice.status`
@@ -249,6 +265,8 @@ the original step instructions say otherwise:
 | **Invoice is one-per-visit (UNIQUE) + the line freezes its price (5.1)** | ERD draws plain FKs | `invoice.visit_id` is a NOT NULL FK with a **UNIQUE** constraint — a second invoice for the same visit is impossible at the DB (ERD §9: per-visit), the same "DB is the guarantee" instinct as the appointment overlap constraint. **`invoice_line` snapshots `description` + `amount`**, frozen at generation (5.2); `treatment_item_id` is a **nullable** reporting-only link. This is the answer to the deferred price-snapshot question — an old invoice reads at the price charged then, not today's. So **5.2 must COPY name+price from `treatment_item` into the line**, not read it live. `payment` is a separate table (an invoice takes several part-payments). Statuses (`invoice.status`, `payment.mode`) are **app-level, no DB enum** — pinned via Pydantic `Literal` in 5.3. Money CHECKs (non-neg, `discount<=subtotal`) are hand-added in the migration (autogenerate emits none). | `backend/app/models/invoice.py`, `backend/app/models/invoice_line.py`, `backend/app/models/payment.py` |
 | **Invoice generation = `POST /visits/{id}/invoice`, server builds lines, biller may add custom ones (5.2)** | Roadmap says only "generate from visit procedures" | The **trigger hangs off the visit** but the resource is the invoice, so it lives on its own **`invoices` router** (no prefix; POST path `/visits/{visit_id}/invoice`, GET `/invoices/{id}`) + a **`billing` service** (6th module) that payments (5.3) + receipt (5.4) extend. Lines = **auto-seeded from the visit's `procedure_performed` rows** (name + current `default_price` COPIED in, frozen) **++ optional biller-typed `extra_lines`** (description + amount, `treatment_item_id` NULL). So a walk-in with zero recorded procedures can still be billed by hand — only a **totally empty** invoice (0 procedures AND 0 custom lines) is a **422**. Re-generate → **409** (friendly pre-check + IntegrityError backstop on the UNIQUE). **Any active staff** (billing is front-desk, NOT dentist-role-split — a test asserts a receptionist can generate). `billing.py` raises domain exceptions (`VisitNotFound`/`InvoiceAlreadyExists`/`NothingToInvoice`/`DiscountExceedsSubtotal`), router maps to HTTP + audits + commits (the 4.3 house pattern). No migration — 5.1's tables suffice. | `backend/app/routers/invoices.py`, `backend/app/services/billing.py`, `backend/app/schemas/invoice.py` |
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
+| **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
+| **Today's collections = `GET /invoices/collections`, summed in the CLINIC zone (5.5)** | — | `billing.todays_collections` sums the day's `payment.amount` where `paid_at` is in the **clinic-local** today — it reads the tz from `clinic_settings` and bounds the day with `clinic_day_bounds` (the 4.9 helper), so a 9pm-IST payment counts for the right clinic day (the 4.9 fix, now for money). Returns `{date, total, count, by_mode}` with `by_mode` always carrying **all three modes** (cash/card/upi, 0.00 if none) for a stable card. Money is `.quantize(Decimal("0.01"))` (the 5.3 "0" vs "0.00" gotcha). **Route order:** `GET /invoices/collections` is declared **BEFORE** `GET /invoices/{invoice_id}` or "collections" parses as a UUID → 422 (the literal-before-`{id}` trap, same as 4.8's needs-follow-up; a test pins it). Any active staff. Dashboard card `app/todays-collections.tsx` on `/`. No migration/model/dep. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `frontend/app/todays-collections.tsx` |
 | **Billing UI + receipt (5.4): clinic identity on `clinic_settings`, print via `window.print()`** | Roadmap says only "printable receipt" | A receipt needs an invoice to exist, and there was **no billing UI** (5.2/5.3 were API-only) — so 5.4 built the whole flow: `/invoices/new/[visitId]` (generate: seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take payment), `/invoices/[id]/receipt` (print). Reached from **each visit row on the patient profile** via **`GET /visits/{visit_id}/invoice`** (new read, 404 = "no invoice yet" → "Generate" vs "View"; reuses the UNIQUE, no visit column added). **Clinic identity lives on `clinic_settings`** (`clinic_name` NOT NULL default 'Dental Clinic', nullable `address`/`phone`; migration `e8dbf0db4dec`, the 11th — autogenerated, the NOT NULL default backfills the singleton) — edited on `/settings/clinic`, printed on the receipt header. **Print = `window.print()` + a `.no-print` class + `@media print` in `globals.css`** — NO PDF lib, no new dep. `frontend/lib/use-invoices.ts` mirrors `use-visits.ts`; `formatMoney` = `Intl.NumberFormat("en-IN", INR)` on the decimal **string** (never float). Billing UI is **any-staff** (no role gate — the API is the guard). Added `useVisit` to `use-visits.ts`. | `frontend/lib/use-invoices.ts`, `frontend/app/invoices/`, `backend/app/models/clinic_settings.py`, `backend/app/routers/invoices.py` |
 | **Treatment items deactivate, never delete** | — | No DELETE route: `active` is flipped via `POST /{id}/deactivate` / `/activate`. Retired items vanish from pickers but stay readable so past visits/invoices that reference them still resolve. Same instinct as patient soft-delete. `name` is unique (duplicates would wreck "revenue by procedure" reporting) → duplicate returns **409**. | `backend/app/routers/treatment_items.py` |
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
@@ -267,6 +285,144 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 5.6 (interlude): patient file uploads — X-rays, photos, documents
+
+**Status:** complete — a new clinical-records capability (upload/list/view/archive files) + storage
+abstraction + a Files section on the profile, verified (207 backend tests pass; lint + build green;
+full stack up; routes live + volume mounted). **One migration (12th), one new backend dep, no renumber
+of later phases.** For commit.
+
+### Why this step
+The app should be real clinical software a dentist uses, not just appointments + invoices. The
+BUILD_PLAN *did* account for "document/X-ray uploads" — but only at **Phase 9 (Optional)**. The user
+considers it core, so we pulled it forward as a **5.6 interlude** (numbering kept — Phase 6 reports /
+Phase 7 deploy unchanged; the Phase-9 bullet is removed). **Charting/odontogram stays out of scope** —
+this is opaque file storage, not drawing on teeth.
+
+### Scope decisions (confirmed with user)
+- **Build now**, as a 5.6 interlude (not a renumber).
+- **`python-multipart`** approved (the one new dep; FastAPI needs it for uploads).
+- **Storage + model shape** were delegated to me: **local disk volume behind a `Storage` interface**
+  (swap for cloud in Phase 7 by config), and a **patient-level `patient_file` with an optional
+  `visit_id`**, soft-deleted.
+
+### Built — backend (migration 12, new dep)
+- `requirements.txt` — `python-multipart==0.0.32`. `config.py` — `upload_dir` (`UPLOAD_DIR`) +
+  `max_upload_bytes` (`MAX_UPLOAD_BYTES`, default 15 MB).
+- `app/models/patient_file.py` — `PatientFile` (patient_id NOT NULL + indexed, nullable visit_id +
+  uploaded_by, kind/original_filename/content_type/size_bytes/caption/storage_key/archived/created_at).
+  Migration `deae87a07c3c` (autogenerated; applies + reverses + re-applies — verified). 13th model.
+- `app/services/storage.py` — the **7th service module**: a `Storage` protocol + `LocalStorage(root)`
+  writing under `UPLOAD_DIR` with a generated `<yyyy>/<mm>/<uuid>` key (never the user's filename).
+  `get_storage()` picks the backend by config.
+- `app/schemas/patient_file.py` — `PatientFileRead` (metadata only) + `PatientFileList`; `FileKind`
+  Literal (xray/photo/document).
+- `app/routers/patient_files.py` — `POST /patients/{id}/files` (multipart, dentist/admin; validates
+  type→415 + size→413 before writing; archived patient→409; bytes-first then metadata+audit in one txn,
+  orphan cleanup on failure), `GET /patients/{id}/files` (list, any staff), `GET /files/{id}/content`
+  (StreamingResponse, any staff, inline), `POST /files/{id}/archive` (soft-delete, dentist/admin).
+  Registered in `main.py`.
+- `docker-compose.yml` — named volume `uploads` at `/data/uploads` + the two env vars.
+- `tests/test_patient_files.py` (**new**, 13) — the byte-for-byte round trip, **receptionist upload
+  403**, list, 415/413, unknown kind 422, unknown patient 404, archived-patient 409, **archive hides
+  from default list but content stays fetchable**, audit row, auth. Storage redirected to a **temp dir**
+  (monkeypatch `settings.upload_dir`), never the real volume. 194 → **207**.
+
+### Built — frontend
+- `lib/use-patient-files.ts` — `usePatientFiles`, `uploadPatientFile` (native `FormData`),
+  `archivePatientFile`, and `fetchFileBlobUrl`/`useFilePreview` (fetch bytes **with the auth header** as
+  an object URL — the content endpoint is guarded, so a plain `<img src>` can't load it). `formatFileSize`.
+- `app/patients/[id]/patient-files-section.tsx` (**new**) — a **Files & X-rays** card on the profile:
+  an upload form (dentist/admin only, hidden for archived patients), a grid of tiles (image previews via
+  authorized blob, PDFs/docs labeled), Download (authorized blob → save) + Archive actions. Wired into
+  `patient-profile.tsx` after the Treatments section.
+
+### Verified
+- **207 backend tests pass** in-container against the compose Postgres — the full upload→store→
+  stream-back round trip (byte-for-byte), the role split, the guards, and soft-delete, all against the
+  real DB (storage in a temp dir). Migration reversible.
+- Frontend **lint + build green**; images rebuilt; **full stack up** through Caddy (`/` → 307). File
+  routes live (**401** unauth, not 404); the `uploads` volume is mounted at `/data/uploads`.
+- **Docker engine had exited between sessions** (standing gotcha) — relaunched + polled before running.
+
+### What was NOT browser-clicked (honest note)
+The upload→store→stream round trip is API-proven (tests + live routes). The **browser click-through is
+the user's** (real auth): pick an actual X-ray/photo, see it preview inline, download a PDF, archive a
+file and watch it drop from the list. Handed over explicitly.
+
+### Out of scope (unchanged)
+Odontogram/charting, image annotation, DICOM viewers, thumbnail/resize pipelines, sharing links. Just
+upload/list/view/download/archive.
+
+### Suggested commit
+`feat: add patient file uploads`
+
+---
+
+## 2026-07-21 — Step 5.5: dashboard — today's collections (PHASE 5 COMPLETE)
+
+**Status:** complete — a clinic-wide collections read + a dashboard card, verified (194 backend tests
+pass; lint + build green; full stack up; the read + clinic-zone boundary proven live). **No migration,
+no new deps, no new module/router.** For commit. **This finishes Phase 5 — billing.**
+
+### Why this step
+The owner's-eye dashboard figure from the mock-ups (BUILD_PLAN §5.4): how much money came in today.
+The pieces existed — payments (5.3) and the clinic-zone day helper (4.9); 5.5 aggregates them.
+
+### Scope decisions (confirmed with user)
+- **Total + count + by-mode breakdown** (cash/card/upi) — what the clinic reconciles against the drawer.
+- **"Today" = the clinic-local day** via `clinic_day_bounds` on `payment.paid_at` (reads the tz from
+  `clinic_settings`) — a 9pm-IST payment counts for the right clinic day, not the next UTC day. Always
+  today, no date picker.
+- **New `GET /invoices/collections`** (any active staff) + a dashboard card — like 4.8's needs-follow-up.
+
+### Built — backend (no migration)
+- `app/services/billing.py` — `todays_collections(db)`: computes the clinic-zone today, bounds it with
+  `clinic_day_bounds`, sums `payment.amount` in-window (total + count + a `group_by(mode)` breakdown
+  that always returns all three modes). All money `.quantize(Decimal("0.01"))`. Reads the tz from
+  `clinic_settings`. Extended the existing service — no new module.
+- `app/schemas/invoice.py` — `CollectionsRead` (`date`, `total`, `count`, `by_mode`).
+- `app/routers/invoices.py` — `GET /invoices/collections`, declared **before** `GET /{invoice_id}`
+  (the literal-before-`{id}` trap).
+- `tests/test_invoices.py` — +6: shape, sums-by-mode (delta-based so shared-DB "today" data doesn't
+  pollute), the **clinic-zone boundary** (pin tz to IST, craft a 00:30-IST `paid_at`, assert it counts
+  for the clinic-today), auth, and **route-not-shadowed-by-`/{id}`**. 189 → **194**.
+
+### Built — frontend
+- `lib/use-invoices.ts` — `Collections` type + `useTodaysCollections()`.
+- `app/todays-collections.tsx` (**new**) — a card: total (large), count, and the by-mode row, with
+  loading/error/empty states. `formatMoney` on the decimal strings (never float).
+- `app/page.tsx` — renders `<TodaysCollections/>` below the schedule, above the dev HealthCard.
+
+### No new deps / model / migration / env / CI
+Reuses `clinic_day_bounds` (4.9), `formatMoney`, the `Numeric`/`Decimal` + quantize discipline (5.3),
+and the clinic-wide-read + dashboard-section pattern (4.8).
+
+### Verified
+- **194 backend tests pass** in-container against the compose Postgres over the real HTTP stack —
+  including the clinic-zone boundary and the route-order pin. The suite is the live proof (payments
+  across modes summed against the real DB), so a separate throwaway run was redundant (honest note).
+- Frontend **lint + build green**; frontend Docker image rebuilt; **full stack up** and reachable
+  through Caddy (`/` → 307 → login). `GET /invoices/collections` live: **401** unauth, **not** shadowed
+  by `/{id}` (200 for the literal path).
+- **Docker Desktop's engine had exited between sessions** (the standing gotcha) — relaunched it and
+  polled `docker info` before running.
+
+### What was NOT browser-clicked (honest note)
+The read is API-proven and the card type-checks + builds. The **dashboard card's browser render is the
+user's to click** (real auth): confirm the total + by-mode appear on `/`, and that they update after
+taking a payment on an invoice.
+
+### PHASE 5 COMPLETE
+The billing loop end to end: invoice/line/payment models, generation from a visit, payment capture with
+derived status + outstanding balance, the billing UI + printable receipt, and now today's collections.
+**Next: Phase 6 — reports & local polish.**
+
+### Suggested commit
+`feat: show daily collections`
 
 ---
 

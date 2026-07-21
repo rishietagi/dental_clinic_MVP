@@ -159,11 +159,11 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 5.3 there are twelve models — `staff_user`, `audit_log`, `patient`, `appointment`,
-`treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
-`invoice_line`, `payment` — and six `app/services/` modules (`audit`, `appointments`, `visits`,
-`treatments`, `clinic`, `billing`). All three billing models now have behaviour: invoice generation
-(5.2) + payment capture (5.3).
+As of the 5.6 interlude there are thirteen models — `staff_user`, `audit_log`, `patient`,
+`appointment`, `treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`,
+`invoice`, `invoice_line`, `payment`, `patient_file` — and seven `app/services/` modules (`audit`,
+`appointments`, `visits`, `treatments`, `clinic`, `billing`, `storage`). The billing loop is complete
+(5.2–5.5); 5.6 added patient file uploads (X-rays/photos/documents).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -288,6 +288,26 @@ API below).
   **overpayment is allowed**) and `outstanding` floors at 0. Both balance figures are
   `.quantize(Decimal("0.01"))` so a floored or coalesced-0 value serialises as `"0.00"` like the
   `Numeric(10,2)` columns, not `"0"`.
+- **`app/models/patient_file.py`** — `PatientFile` (5.6), an uploaded X-ray/photo/document. `patient_id`
+  FK NOT NULL (indexed), nullable `visit_id` (a file may be tied to a sitting or not) + `uploaded_by`.
+  Metadata only — `kind`, `original_filename`, `content_type`, `size_bytes`, `caption`, and an opaque
+  `storage_key`; the **bytes live on disk, never in the DB**. Soft-delete via `archived` (medico-legal
+  retention). This is opaque file storage, **not** charting/odontogram (out of scope).
+- **`app/services/storage.py`** — the **seventh `services/` module** (5.6). A `Storage` protocol
+  (`save`/`open`/`delete`) with a `LocalStorage(root)` implementation writing under `UPLOAD_DIR` (a
+  Docker volume in dev) with a generated `<yyyy>/<mm>/<uuid>` key (never the user's filename —
+  traversal/collision safety). `get_storage()` picks the backend from config, so **Phase 7 swaps in
+  Supabase Storage / S3 by config, not call-site changes**. Keeping blobs out of Postgres keeps dumps
+  small and the backend replaceable.
+- **`app/routers/patient_files.py`** — the file API (5.6): `POST /patients/{id}/files` (multipart
+  upload, **`require_role("dentist","admin")`** — clinical records are the dentist's, like visits;
+  validates content-type→415 + size→413 before writing; archived patient→409; writes bytes-first then
+  the metadata + audit row in one transaction, cleaning up orphaned bytes if the commit fails),
+  `GET /patients/{id}/files` (list, any staff), `GET /files/{id}/content` (streams the bytes with the
+  stored `Content-Type`, any staff, still auth-guarded — no patient id in this URL), and
+  `POST /files/{id}/archive` (soft-delete, dentist/admin). Frontend: a **Files & X-rays** section on the
+  patient profile; image previews are fetched as **authorized blobs** (the content endpoint needs the
+  token, so a bare `<img src>` can't load it).
 
 - **`app/services/visits.py`** — the **third `services/` module** (4.3). `resolve_treatment()` holds
   the auto-create/auto-close rule: given a `treatment_id` it validates the thread (404 missing / 409
@@ -313,8 +333,12 @@ PK → roles).
 **treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`), and the
 **invoice API** (`POST /visits/{visit_id}/invoice` to generate, `GET /visits/{visit_id}/invoice` to
 resolve a visit's invoice or 404, `POST /invoices/{invoice_id}/payments` to capture a payment,
-`GET /invoices/{invoice_id}`). Every invoice read carries its lines, its payments, and the derived
-`status` / `amount_paid` / `outstanding`.
+`GET /invoices/collections` for today's takings, `GET /invoices/{invoice_id}`). Every invoice read
+carries its lines, its payments, and the derived `status` / `amount_paid` / `outstanding`.
+`GET /invoices/collections` (5.5) sums the day's payments in the **clinic timezone** (via
+`billing.todays_collections` → `clinic_day_bounds`) and returns `{date, total, count, by_mode}`; it is
+declared before `/invoices/{invoice_id}` so "collections" isn't parsed as a UUID. It feeds the
+**Today's collections** card (`frontend/app/todays-collections.tsx`) on the dashboard.
 
 The **billing UI (5.4)** is the first Phase-5 frontend: `frontend/app/invoices/new/[visitId]` (generate
 from a visit — seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take

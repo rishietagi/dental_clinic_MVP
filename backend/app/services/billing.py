@@ -22,18 +22,22 @@ commits — the router owns the transaction, so the invoice, its lines and the a
 row land together or not at all.
 """
 
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.clinic_settings import ClinicSettings
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.payment import Payment
 from app.models.procedure_performed import ProcedurePerformed
 from app.models.treatment_item import TreatmentItem
 from app.models.visit import Visit
+from app.services.clinic import clinic_day_bounds
 
 
 class VisitNotFound(Exception):
@@ -222,3 +226,56 @@ def record_payment(
     _recompute_status(db, invoice)
     db.flush()
     return invoice
+
+
+# --- today's collections (5.5) -----------------------------------------------
+
+# The payment modes we report a breakdown for. Kept in sync with the
+# PaymentCreate Literal — a mode outside this set couldn't be recorded, but if the
+# set ever grows, both places change together.
+_COLLECTION_MODES = ("cash", "card", "upi")
+
+
+def todays_collections(db: Session) -> dict:
+    """Sum of payments taken on the clinic's TODAY, with a per-mode breakdown.
+
+    "Today" is the clinic-local calendar day, not the server's or UTC's: a payment
+    taken at 9pm IST must count for that clinic day, not slip into the next UTC day.
+    We read the clinic timezone from `clinic_settings` (the same source
+    `list_appointments` uses) and bound the day with `clinic_day_bounds` (4.9).
+
+    Returns `{date, total, count, by_mode}` where `date` is the clinic-local date,
+    `total`/`by_mode` values are `Decimal` quantized to cents (so they serialize as
+    "0.00", not "0" — the 5.3 gotcha), and `by_mode` always carries all of
+    cash/card/upi (0.00 if none), so the dashboard card's layout is stable.
+    """
+    tz_name = db.get(ClinicSettings, 1).timezone
+    today = datetime.now(ZoneInfo(tz_name)).date()
+    start, end = clinic_day_bounds(today, tz_name)
+
+    in_today = (Payment.paid_at >= start) & (Payment.paid_at <= end)
+
+    total = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(in_today)
+    )
+    count = db.scalar(select(func.count()).select_from(Payment).where(in_today)) or 0
+
+    grouped = db.execute(
+        select(Payment.mode, func.coalesce(func.sum(Payment.amount), 0))
+        .where(in_today)
+        .group_by(Payment.mode)
+    ).all()
+    sums = {mode: amount for mode, amount in grouped}
+    by_mode = {m: _cents(sums.get(m, 0)) for m in _COLLECTION_MODES}
+
+    return {
+        "date": today,
+        "total": _cents(total),
+        "count": count,
+        "by_mode": by_mode,
+    }
+
+
+def _cents(value) -> Decimal:
+    """Quantize a money value to 2 places so it serializes as '0.00', not '0'."""
+    return Decimal(value).quantize(_CENTS)

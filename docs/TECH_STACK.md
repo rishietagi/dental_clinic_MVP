@@ -89,6 +89,16 @@ FastAPI backend does **not** yet verify the Supabase JWT — that arrives in ste
 | python-dotenv | 1.2.2 | Lets pydantic-settings read a local `.env` file. |
 | PyJWT[crypto] | 2.13.0 | Verifies Supabase access tokens (added 1.3). `PyJWKClient` fetches + caches the JWKS public keys; `jwt.decode` checks the ES256 signature + audience + issuer + expiry. |
 | cryptography | 49.0.0 | Backs PyJWT's ES256 (elliptic-curve) signature verification. |
+| python-multipart | 0.0.32 | Parses multipart form uploads — required for FastAPI `UploadFile`/`Form`. Added 5.6 for patient file uploads (X-rays/photos/documents). |
+
+### File storage (5.6)
+
+Uploaded patient files' **bytes live on disk**, never in Postgres. In local dev they go to a Docker
+named volume (`uploads`) mounted at `UPLOAD_DIR=/data/uploads`; the DB (`patient_file`) keeps only
+metadata + an opaque `storage_key`. All file I/O goes through a `Storage` protocol in
+`app/services/storage.py` (today `LocalStorage`), so **Phase 7 can swap in Supabase Storage / S3 by
+implementing the same interface and changing config — no call-site changes.** No cloud storage
+dependency is installed yet (that's a Phase-7 decision); `python-multipart` is the only new dep here.
 
 ## Database access
 

@@ -3,6 +3,7 @@ import { NeedsFollowUp } from "./needs-follow-up";
 import { RoleNav } from "./role-nav";
 import { SignOutButton } from "./sign-out-button";
 import { TodayDashboard } from "./today-dashboard";
+import { TodaysCollections } from "./todays-collections";
 import { createClient } from "@/lib/supabase/server";
 
 // The dashboard — the app's home screen (step 3.6). The proxy guard guarantees
@@ -42,6 +43,9 @@ export default async function Home() {
       <NeedsFollowUp />
 
       <TodayDashboard />
+
+      {/* The owner's-eye money figure, alongside the day's operational view. */}
+      <TodaysCollections />
 
       {/* System/dev card — kept, but last so the clinical content leads. */}
       <div className="mt-2 opacity-80">

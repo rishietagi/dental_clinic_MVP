@@ -38,7 +38,12 @@ from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.payment import Payment
 from app.models.staff_user import StaffUser
-from app.schemas.invoice import InvoiceGenerate, InvoiceRead, PaymentCreate
+from app.schemas.invoice import (
+    CollectionsRead,
+    InvoiceGenerate,
+    InvoiceRead,
+    PaymentCreate,
+)
 from app.services.audit import record_audit
 from app.services.billing import (
     DiscountExceedsSubtotal,
@@ -50,6 +55,7 @@ from app.services.billing import (
     get_invoice_by_visit,
     invoice_balances,
     record_payment,
+    todays_collections,
 )
 
 router = APIRouter(tags=["invoices"])
@@ -215,6 +221,23 @@ def create_payment(
     db.commit()
     db.refresh(invoice)
     return _to_read(db, invoice)
+
+
+@router.get("/invoices/collections", response_model=CollectionsRead)
+def get_todays_collections(
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> CollectionsRead:
+    """Money collected on the clinic's today, total + a per-mode breakdown.
+
+    The owner's-eye dashboard figure (BUILD_PLAN §5.4). Any active staff — the
+    front desk reconciles the drawer at day's end. "Today" is the clinic-local day
+    (see services/billing.todays_collections).
+
+    Declared BEFORE `GET /invoices/{invoice_id}`, or FastAPI would parse
+    "collections" as a UUID path param and 422 — the literal-before-{id} trap.
+    """
+    return CollectionsRead(**todays_collections(db))
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceRead)

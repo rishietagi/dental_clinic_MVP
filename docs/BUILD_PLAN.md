@@ -486,6 +486,7 @@ and executed in Phase 7, once there's something worth deploying.
 | 5.3 | Payment capture + outstanding balance | `feat: add payment capture` |
 | 5.4 | Printable receipt | `feat: add printable receipts` |
 | 5.5 | Dashboard: today's collections | `feat: show daily collections` |
+| 5.6 | **Interlude — patient file uploads (X-rays, photos, documents).** Pulled forward from Phase 9 (was "Optional") at the user's request: it's core clinical functionality for software a dentist actually uses. Local disk volume behind a swappable storage interface; NOT charting/odontogram (still out of scope). | `feat: add patient file uploads` |
 
 ### PHASE 6 — Reports & local polish
 | 6.1 | Reports: revenue trend, procedure mix, no-show rate | `feat: add practice reports` |
@@ -525,7 +526,8 @@ The research spike you wanted. Do it *here*, with a real app to size.
 > mother's patients in here until you have restored a backup and seen the rows.
 
 ### PHASE 9 — Optional
-WhatsApp reminders + follow-up nudges · recall reminders · document/X-ray uploads
+WhatsApp reminders + follow-up nudges · recall reminders
+*(document/X-ray uploads were pulled forward and built in the 5.6 interlude — see the Phase 5 table.)*
 
 ## 11. Non-negotiables
 

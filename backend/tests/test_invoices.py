@@ -21,6 +21,9 @@ batched flush and trips the FKs.
 """
 
 import uuid
+from datetime import datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,6 +34,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.main import app
 from app.models.audit_log import AuditLog
+from app.models.clinic_settings import ClinicSettings
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.patient import Patient
@@ -492,3 +496,93 @@ def test_get_invoice_for_unknown_visit(as_receptionist):
     ctx = as_receptionist
     resp = ctx.client.get(f"/visits/{uuid.uuid4()}/invoice")
     assert resp.status_code == 404
+
+
+# --- today's collections (5.5) -----------------------------------------------
+#
+# The test DB is shared, so other suites' payments may also fall on "today". These
+# tests assert on the DELTA the payments they make cause, not absolute totals — the
+# one exception is the route-shape/empty checks, which only look at structure.
+
+def _collections(ctx: Ctx) -> dict:
+    resp = ctx.client.get("/invoices/collections")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_collections_shape(as_receptionist):
+    ctx = as_receptionist
+    data = _collections(ctx)
+    assert set(data.keys()) == {"date", "total", "count", "by_mode"}
+    # by_mode always carries all three modes for a stable card layout.
+    assert set(data["by_mode"].keys()) == {"cash", "card", "upi"}
+
+
+def test_collections_sums_todays_payments_by_mode(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+
+    before = _collections(ctx)
+    _pay(ctx, inv["id"], "1000.00", mode="cash")
+    _pay(ctx, inv["id"], "500.00", mode="card")
+    _pay(ctx, inv["id"], "250.00", mode="upi")
+    after = _collections(ctx)
+
+    # Deltas isolate this test's payments from any other "today" data.
+    assert _delta(after, before, "total") == Decimal("1750.00")
+    assert after["count"] - before["count"] == 3
+    assert _mode_delta(after, before, "cash") == Decimal("1000.00")
+    assert _mode_delta(after, before, "card") == Decimal("500.00")
+    assert _mode_delta(after, before, "upi") == Decimal("250.00")
+
+
+def test_collections_counts_the_clinic_day_not_utc(as_receptionist):
+    """A payment at an instant that is 'today' in the clinic zone but a different
+    calendar day in UTC is counted for the clinic day — the 4.9 fix, for money."""
+    ctx = as_receptionist
+    db = ctx.db
+
+    # Pin the clinic to IST and read what "today" is there.
+    prev_tz = db.get(ClinicSettings, 1).timezone
+    db.get(ClinicSettings, 1).timezone = "Asia/Kolkata"
+    db.commit()
+    try:
+        ist = ZoneInfo("Asia/Kolkata")
+        today_ist = datetime.now(ist).date()
+        # 00:30 IST today = 19:00 UTC *yesterday* — a UTC-day query would miss it.
+        instant = datetime(today_ist.year, today_ist.month, today_ist.day, 0, 30, tzinfo=ist)
+
+        inv = _generate(ctx, procedures=[ctx.item_a.id])
+        before = _collections(ctx)
+        # Record via the API, then backdate paid_at to the crafted instant.
+        resp = _pay(ctx, inv["id"], "700.00", mode="cash")
+        assert resp.status_code == 201
+        pay_id = uuid.UUID(resp.json()["payments"][-1]["id"])
+        db.get(Payment, pay_id).paid_at = instant
+        db.commit()
+
+        after = _collections(ctx)
+        assert after["date"] == today_ist.isoformat()
+        assert _delta(after, before, "total") == Decimal("700.00")
+    finally:
+        db.get(ClinicSettings, 1).timezone = prev_tz
+        db.commit()
+
+
+def test_collections_requires_auth():
+    assert client.get("/invoices/collections").status_code in (401, 403)
+
+
+def test_collections_not_shadowed_by_id_route(as_receptionist):
+    """'collections' must resolve to the aggregate, not be parsed as an invoice id."""
+    ctx = as_receptionist
+    resp = ctx.client.get("/invoices/collections")
+    assert resp.status_code == 200  # not 422 (uuid parse) or 404 (no such invoice)
+
+
+def _delta(after: dict, before: dict, key: str) -> Decimal:
+    return Decimal(after[key]) - Decimal(before[key])
+
+
+def _mode_delta(after: dict, before: dict, mode: str) -> Decimal:
+    return Decimal(after["by_mode"][mode]) - Decimal(before["by_mode"][mode])

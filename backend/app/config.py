@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # the auth dependency fails loud if a request needs it and it's unset.
     supabase_url: str = ""
 
+    # Where uploaded patient files (X-rays, photos, docs) are stored on disk
+    # (5.6). A local path in dev, backed by a Docker named volume; Phase 7 swaps
+    # the storage implementation (Supabase Storage / S3) by config, not by
+    # changing call sites. Never hardcoded — differs local vs prod by env only.
+    upload_dir: str = "/data/uploads"
+
+    # Max accepted upload size in bytes (default 15 MB) — a dental X-ray/photo is
+    # comfortably under this; the router rejects anything larger with 413.
+    max_upload_bytes: int = 15 * 1024 * 1024
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

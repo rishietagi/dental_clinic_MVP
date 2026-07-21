@@ -107,6 +107,58 @@ export function useInvoice(invoiceId: string): InvoiceState & { refetch: () => v
   return { ...state, refetch };
 }
 
+// Today's collections for the dashboard (5.5). Money values are decimal strings.
+export type Collections = {
+  date: string;
+  total: string;
+  count: number;
+  by_mode: Record<string, string>;
+};
+
+type CollectionsState =
+  | { kind: "loading" }
+  | { kind: "ready"; data: Collections }
+  | { kind: "error"; message: string };
+
+export function useTodaysCollections(): CollectionsState & { refetch: () => void } {
+  const [state, setState] = useState<CollectionsState>(
+    apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
+  );
+  const [nonce, setNonce] = useState(0);
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      if (!cancelled) setState({ kind: "loading" });
+      try {
+        const headers = await authHeaders();
+        if (!headers) throw new Error("Not signed in.");
+
+        const res = await fetch(`${apiUrl}/invoices/collections`, { headers });
+        if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+
+        const data = (await res.json()) as Collections;
+        if (!cancelled) setState({ kind: "ready", data });
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message =
+            error instanceof Error ? error.message : "Could not load collections.";
+          setState({ kind: "error", message });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce]);
+
+  return { ...state, refetch };
+}
+
 // The invoice for a visit, or "none" if it hasn't been generated yet. The patient
 // profile uses this per visit to choose "Generate invoice" vs "View invoice".
 type VisitInvoiceState =

@@ -9,6 +9,7 @@ from app.routers import (
     auth,
     clinic_settings,
     invoices,
+    patient_files,
     patients,
     treatment_items,
     treatments,
@@ -33,6 +34,7 @@ app.include_router(treatment_items.router)
 app.include_router(treatments.router)
 app.include_router(visits.router)
 app.include_router(invoices.router)
+app.include_router(patient_files.router)
 
 
 @app.get("/health")

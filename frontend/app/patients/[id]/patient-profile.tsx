@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { statusLabel, useVisitInvoice } from "@/lib/use-invoices";
 import { usePatient } from "@/lib/use-patient";
+import { PatientFilesSection } from "./patient-files-section";
 import {
   closeTreatment,
   reopenTreatment,
@@ -117,6 +118,14 @@ export function PatientProfile({ patientId }: { patientId: string }) {
           treatments.refetch();
           visits.refetch();
         }}
+      />
+
+      {/* Files & X-rays. Reads for any staff; upload/archive gated to
+          dentist/admin (and the upload form is hidden for archived patients —
+          the API refuses it either way). */}
+      <PatientFilesSection
+        patientId={patientId}
+        canManage={canManage && !p.archived}
       />
     </div>
   );
