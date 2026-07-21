@@ -159,11 +159,11 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 5.1 there are twelve models — `staff_user`, `audit_log`, `patient`, `appointment`,
+As of 5.3 there are twelve models — `staff_user`, `audit_log`, `patient`, `appointment`,
 `treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
-`invoice_line`, `payment` — and five `app/services/` modules (`audit`, `appointments`, `visits`,
-`treatments`, `clinic`). The three billing models (5.1) are schema-only so far — no service module
-or endpoints yet; invoice generation is 5.2, payment capture 5.3.
+`invoice_line`, `payment` — and six `app/services/` modules (`audit`, `appointments`, `visits`,
+`treatments`, `clinic`, `billing`). All three billing models now have behaviour: invoice generation
+(5.2) + payment capture (5.3).
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -270,6 +270,22 @@ API below).
   summing them versus `total` drives status + outstanding balance (5.3). `amount` is `Numeric(10,2)`
   (CHECK `>= 0`); `mode` (cash / card / upi) is free-text, pinned via a Pydantic `Literal` when the
   payment API lands (5.3). No `relationship()` navigations on any of the three — house style.
+- **`app/services/billing.py`** — the **sixth `services/` module** (5.2). `generate_invoice()` turns
+  a recorded visit into a priced invoice: it copies each of the visit's `procedure_performed` rows
+  into a **frozen** `invoice_line` (the catalogue item's current `name` + `default_price` copied in —
+  the snapshot rule), appends any biller-typed custom lines, sums the subtotal, applies a discount,
+  and creates the invoice + lines. It pre-checks the one-per-visit rule (the `visit_id` UNIQUE is the
+  real guarantee) and raises **domain exceptions** — `VisitNotFound`, `InvoiceAlreadyExists`,
+  `NothingToInvoice`, `DiscountExceedsSubtotal` — which the router maps to 404 / 409 / 422 / 422. It
+  `flush()`es but never commits (the caller owns the transaction — the 4.3 pattern). Reuses the same
+  procedure↔catalogue join as `routers/visits._load_procedures`. **Payment capture (5.3) extends this
+  module**, not a new one: `record_payment()` adds a `Payment` and recomputes the invoice status;
+  `_recompute_status()` **derives** `invoice.status` from `sum(payments)` vs `total`
+  (`unpaid`/`partially_paid`/`paid`) — never client-set, so it can't drift; `invoice_balances()`
+  returns `(amount_paid, outstanding)` where `amount_paid` is the true sum (may exceed total, as
+  **overpayment is allowed**) and `outstanding` floors at 0. Both balance figures are
+  `.quantize(Decimal("0.01"))` so a floored or coalesced-0 value serialises as `"0.00"` like the
+  `Numeric(10,2)` columns, not `"0"`.
 
 - **`app/services/visits.py`** — the **third `services/` module** (4.3). `resolve_treatment()` holds
   the auto-create/auto-close rule: given a `treatment_id` it validates the thread (404 missing / 409
@@ -292,7 +308,10 @@ PK → roles).
 (`GET /treatment-items`, `GET/PATCH /treatment-items/{id}`, `POST /treatment-items`,
 `POST /treatment-items/{id}/deactivate|activate`), and the **visit recording API** (`POST /visits`,
 `GET /visits/{id}`, `GET /visits?patient_id=|?treatment_id=`, `PATCH /visits/{id}`), and the
-**treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`).
+**treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`), and the
+**invoice API** (`POST /visits/{visit_id}/invoice` to generate, `POST /invoices/{invoice_id}/payments`
+to capture a payment, `GET /invoices/{invoice_id}`). Every invoice read carries its lines, its
+payments, and the derived `status` / `amount_paid` / `outstanding`.
 
 `app/routers/treatments.py` reads (4.4) require `patient_id` — an unfiltered list of every treatment
 in the clinic isn't a screen anyone has — and are ordered **open-first, then newest**, because every

@@ -1,0 +1,464 @@
+"""Endpoint tests for invoice generation + read (step 5.2).
+
+DB-backed, on the test_visits.py template (auth faked by overriding
+get_current_claims; skips fast without a database).
+
+The headline tests pin the 5.1/5.2 decisions into behaviour:
+
+- `test_generate_from_procedures` — the main path: a visit's procedures become
+  priced lines, subtotal/total computed.
+- `test_line_price_is_frozen` — the snapshot rule. Rename + reprice the catalogue
+  item AFTER generating; the invoice still reads the price charged then.
+- `test_custom_line_only` — a walk-in with no recorded procedures can still be
+  billed by typing a line (the "custom invoice" case).
+- `test_second_generate_conflicts` — one invoice per visit (the UNIQUE).
+- `test_receptionist_can_generate` — billing is front-desk, not role-split like
+  clinical writes.
+
+Cleanup runs child-first (payments/lines -> invoices -> procedures -> visits ->
+treatments -> patients) and commits per delete, because SQLAlchemy reorders a
+batched flush and trips the FKs.
+"""
+
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select, text
+
+from app.auth import get_current_claims
+from app.config import settings
+from app.db import SessionLocal
+from app.main import app
+from app.models.audit_log import AuditLog
+from app.models.invoice import Invoice
+from app.models.invoice_line import InvoiceLine
+from app.models.patient import Patient
+from app.models.payment import Payment
+from app.models.procedure_performed import ProcedurePerformed
+from app.models.staff_user import StaffUser
+from app.models.treatment import Treatment
+from app.models.treatment_item import TreatmentItem
+from app.models.visit import Visit
+
+client = TestClient(app)
+
+
+def test_requires_auth():
+    assert client.post(f"/visits/{uuid.uuid4()}/invoice", json={}).status_code in (401, 403)
+    assert client.get(f"/invoices/{uuid.uuid4()}").status_code in (401, 403)
+
+
+@pytest.fixture(scope="module")
+def db_available() -> bool:
+    probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
+    try:
+        with probe.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"database not reachable, skipping DB tests: {exc}")
+    finally:
+        probe.dispose()
+    return True
+
+
+class Ctx:
+    """The client, the acting staff, a patient, and two catalogue items."""
+
+    def __init__(self, db, staff, patient, item_a, item_b):
+        self.db = db
+        self.staff = staff
+        self.patient = patient
+        self.item_a = item_a
+        self.item_b = item_b
+        self.client = client
+
+
+def _make_ctx(roles: list[str]) -> Ctx:
+    db = SessionLocal()
+    staff = StaffUser(
+        id=uuid.uuid4(),
+        name=f"Test {'/'.join(roles)}",
+        email=f"{uuid.uuid4()}@clinic.local",
+        roles=roles,
+        active=True,
+    )
+    patient = Patient(name="Invoice Test Patient")
+    item_a = TreatmentItem(name=f"RCT {uuid.uuid4().hex[:8]}", default_price="4000.00")
+    item_b = TreatmentItem(name=f"Scaling {uuid.uuid4().hex[:8]}", default_price="1500.00")
+    db.add_all([staff, patient, item_a, item_b])
+    db.commit()
+    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
+    return Ctx(db, staff, patient, item_a, item_b)
+
+
+def _cleanup(ctx: Ctx) -> None:
+    app.dependency_overrides.clear()
+    db = ctx.db
+    db.rollback()
+
+    patient_ids = [ctx.patient.id]
+    visit_ids = [
+        v.id for v in db.scalars(select(Visit).where(Visit.patient_id.in_(patient_ids)))
+    ]
+
+    # Invoices (+ their lines + payments) first — they reference visits.
+    invoice_ids = [
+        i.id for i in db.scalars(select(Invoice).where(Invoice.visit_id.in_(visit_ids)))
+    ] if visit_ids else []
+    for iid in invoice_ids:
+        for pay in db.scalars(select(Payment).where(Payment.invoice_id == iid)):
+            db.delete(pay)
+            db.commit()
+        for line in db.scalars(select(InvoiceLine).where(InvoiceLine.invoice_id == iid)):
+            db.delete(line)
+            db.commit()
+        db.delete(db.get(Invoice, iid))
+        db.commit()
+
+    for vid in visit_ids:
+        for proc in db.scalars(
+            select(ProcedurePerformed).where(ProcedurePerformed.visit_id == vid)
+        ):
+            db.delete(proc)
+            db.commit()
+        db.delete(db.get(Visit, vid))
+        db.commit()
+    for t in db.scalars(select(Treatment).where(Treatment.patient_id.in_(patient_ids))):
+        db.delete(t)
+        db.commit()
+    for row in db.scalars(select(AuditLog).where(AuditLog.actor_id == ctx.staff.id)):
+        db.delete(row)
+        db.commit()
+    for model, oid in [
+        (TreatmentItem, ctx.item_a.id),
+        (TreatmentItem, ctx.item_b.id),
+        (Patient, ctx.patient.id),
+        (StaffUser, ctx.staff.id),
+    ]:
+        obj = db.get(model, oid)
+        if obj is not None:
+            db.delete(obj)
+            db.commit()
+    db.close()
+
+
+@pytest.fixture
+def as_receptionist(db_available):
+    ctx = _make_ctx(["receptionist"])
+    try:
+        yield ctx
+    finally:
+        _cleanup(ctx)
+
+
+def _record_visit(ctx: Ctx, *, procedures) -> str:
+    """Create a visit + its procedures directly in the DB, return the visit id.
+
+    Recording a visit is dentist-write (4.3); this suite acts as a receptionist to
+    prove billing is front-desk, so it builds the clinical rows directly rather than
+    through the dentist-only /visits API. procedures = list of treatment_item ids.
+    """
+    db = ctx.db
+    treatment = Treatment(patient_id=ctx.patient.id, title="RCT tooth 36", tooth_ref="36")
+    db.add(treatment)
+    db.commit()
+    visit = Visit(patient_id=ctx.patient.id, treatment_id=treatment.id)
+    db.add(visit)
+    db.commit()
+    for item_id in procedures:
+        db.add(ProcedurePerformed(visit_id=visit.id, treatment_item_id=item_id))
+    db.commit()
+    return str(visit.id)
+
+
+def _generate(ctx: Ctx, *, procedures, **body) -> dict:
+    """Record a visit + generate its invoice; return the invoice JSON."""
+    visit_id = _record_visit(ctx, procedures=procedures)
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+# --- generation --------------------------------------------------------------
+
+def test_generate_from_procedures(as_receptionist):
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id, ctx.item_b.id])
+
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+
+    assert data["visit_id"] == visit_id
+    assert data["patient_id"] == str(ctx.patient.id)
+    assert data["status"] == "unpaid"
+    assert len(data["lines"]) == 2
+    # Each line priced from the catalogue item's default_price.
+    by_desc = {ln["description"]: ln for ln in data["lines"]}
+    assert by_desc[ctx.item_a.name]["amount"] == "4000.00"
+    assert by_desc[ctx.item_b.name]["amount"] == "1500.00"
+    assert all(ln["treatment_item_id"] is not None for ln in data["lines"])
+    assert data["subtotal"] == "5500.00"
+    assert data["discount"] == "0.00"
+    assert data["total"] == "5500.00"
+    # A fresh invoice has no payments: nothing paid, the whole total outstanding.
+    assert data["amount_paid"] == "0.00"
+    assert data["outstanding"] == "5500.00"
+    assert data["payments"] == []
+
+
+def test_line_price_is_frozen(as_receptionist):
+    """After generating, renaming + repricing the item must NOT change the invoice."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+
+    gen = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert gen.status_code == 201, gen.text
+    invoice_id = gen.json()["id"]
+    original_name = ctx.item_a.name
+
+    # Reprice + rename the catalogue item after billing.
+    item = ctx.db.get(TreatmentItem, ctx.item_a.id)
+    item.name = f"Renamed {uuid.uuid4().hex[:8]}"
+    item.default_price = "9999.99"
+    ctx.db.commit()
+
+    resp = ctx.client.get(f"/invoices/{invoice_id}")
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["description"] == original_name   # frozen label
+    assert line["amount"] == "4000.00"            # frozen price
+    assert resp.json()["total"] == "4000.00"
+
+
+def test_custom_line_only(as_receptionist):
+    """A visit with no procedures can still be billed with a typed line."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[])
+
+    resp = ctx.client.post(
+        f"/visits/{visit_id}/invoice",
+        json={"extra_lines": [{"description": "X-ray", "amount": "300.00"}]},
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert len(data["lines"]) == 1
+    assert data["lines"][0]["description"] == "X-ray"
+    assert data["lines"][0]["treatment_item_id"] is None  # custom line, no catalogue
+    assert data["subtotal"] == "300.00"
+
+
+def test_procedures_plus_custom_lines(as_receptionist):
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+
+    resp = ctx.client.post(
+        f"/visits/{visit_id}/invoice",
+        json={"extra_lines": [{"description": "Materials", "amount": "250.00"}]},
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert len(data["lines"]) == 2
+    assert data["subtotal"] == "4250.00"  # 4000 + 250
+
+
+def test_discount_applied(as_receptionist):
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+
+    resp = ctx.client.post(
+        f"/visits/{visit_id}/invoice", json={"discount": "500.00"}
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["subtotal"] == "4000.00"
+    assert data["discount"] == "500.00"
+    assert data["total"] == "3500.00"
+
+
+def test_discount_exceeding_subtotal_rejected(as_receptionist):
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_b.id])  # subtotal 1500
+
+    resp = ctx.client.post(
+        f"/visits/{visit_id}/invoice", json={"discount": "2000.00"}
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_empty_invoice_rejected(as_receptionist):
+    """0 procedures + 0 custom lines = nothing to charge."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[])
+
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert resp.status_code == 422, resp.text
+
+
+def test_second_generate_conflicts(as_receptionist):
+    """One invoice per visit — the UNIQUE surfaces as a 409."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+
+    first = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert first.status_code == 201
+    second = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert second.status_code == 409, second.text
+
+
+def test_unknown_visit(as_receptionist):
+    ctx = as_receptionist
+    resp = ctx.client.post(f"/visits/{uuid.uuid4()}/invoice", json={})
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_unknown_invoice(as_receptionist):
+    ctx = as_receptionist
+    resp = ctx.client.get(f"/invoices/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def test_receptionist_can_generate(as_receptionist):
+    """Billing is the front desk's job — NOT role-split like clinical writes."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert resp.status_code == 201, resp.text
+
+
+def test_generation_writes_audit_row(as_receptionist):
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    invoice_id = uuid.UUID(resp.json()["id"])
+
+    ctx.db.expire_all()
+    row = ctx.db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity == "invoice", AuditLog.entity_id == invoice_id
+        )
+    )
+    assert row is not None
+    assert row.action == "create"
+
+
+# --- payment capture (5.3) ---------------------------------------------------
+
+def _pay(ctx: Ctx, invoice_id: str, amount: str, mode: str = "cash"):
+    return ctx.client.post(
+        f"/invoices/{invoice_id}/payments", json={"amount": amount, "mode": mode}
+    )
+
+
+def test_partial_payment(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+    assert inv["status"] == "unpaid"
+
+    resp = _pay(ctx, inv["id"], "1000.00")
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == "partially_paid"
+    assert data["amount_paid"] == "1000.00"
+    assert data["outstanding"] == "3000.00"
+    assert len(data["payments"]) == 1
+    assert data["payments"][0]["mode"] == "cash"
+
+
+def test_full_payment_marks_paid(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+
+    resp = _pay(ctx, inv["id"], "4000.00", mode="upi")
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == "paid"
+    assert data["amount_paid"] == "4000.00"
+    assert data["outstanding"] == "0.00"
+
+
+def test_two_part_payments_sum_to_paid(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+
+    assert _pay(ctx, inv["id"], "1500.00").json()["status"] == "partially_paid"
+    final = _pay(ctx, inv["id"], "2500.00", mode="card").json()
+    assert final["status"] == "paid"
+    assert final["amount_paid"] == "4000.00"
+    assert final["outstanding"] == "0.00"
+    assert len(final["payments"]) == 2
+
+
+def test_overpayment_allowed_outstanding_floors_at_zero(as_receptionist):
+    """Overpayment is allowed: sum may exceed total, outstanding never goes negative."""
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_b.id])  # total 1500
+
+    resp = _pay(ctx, inv["id"], "2000.00")
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == "paid"
+    assert data["amount_paid"] == "2000.00"   # true sum, may exceed total
+    assert data["outstanding"] == "0.00"      # floored, never negative
+
+
+def test_zero_payment_allowed(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])
+
+    resp = _pay(ctx, inv["id"], "0.00")
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == "unpaid"          # nothing actually paid
+    assert data["amount_paid"] == "0.00"
+
+
+def test_unknown_mode_rejected(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])
+    resp = _pay(ctx, inv["id"], "100.00", mode="bitcoin")
+    assert resp.status_code == 422, resp.text
+
+
+def test_payment_on_unknown_invoice(as_receptionist):
+    ctx = as_receptionist
+    resp = _pay(ctx, str(uuid.uuid4()), "100.00")
+    assert resp.status_code == 404, resp.text
+
+
+def test_payment_requires_auth():
+    resp = client.post(
+        f"/invoices/{uuid.uuid4()}/payments", json={"amount": "100.00", "mode": "cash"}
+    )
+    assert resp.status_code in (401, 403)
+
+
+def test_get_invoice_reflects_payments(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+    _pay(ctx, inv["id"], "1000.00")
+
+    resp = ctx.client.get(f"/invoices/{inv['id']}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "partially_paid"
+    assert data["amount_paid"] == "1000.00"
+    assert data["outstanding"] == "3000.00"
+    assert len(data["payments"]) == 1
+
+
+def test_payment_writes_audit_row(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])
+    _pay(ctx, inv["id"], "500.00")
+
+    ctx.db.expire_all()
+    row = ctx.db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity == "payment",
+            AuditLog.entity_id == uuid.UUID(inv["id"]),
+        )
+    )
+    assert row is not None
+    assert row.action == "payment"
