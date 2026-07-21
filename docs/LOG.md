@@ -15,39 +15,34 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are:** Phases 0–3 are complete. **PHASE 4 HAS BEGUN** (the clinical core). Phase 3 gave
-us the appointment stack: model + FKs (3.1, migration `56fda58b828c`), **booking API +
-double-booking prevention** (3.2, migration `feae714ecef5`), **day-view calendar** (3.3), **week
-view + drag-drop reschedule** (3.4), **status workflow** (3.5), **dashboard v1 on `/`** (3.6).
-**Step 4.1 is done:** the **treatment catalogue** (`treatment_item` + admin Settings CRUD, migration
-`73aeddd50693`). **Step 4.2 is done:** the **clinical core models** — `treatment` + `visit` +
-`procedure_performed`, and **`appointment.treatment_id` finally got its real FK** (migration
-`999215bea700`). **Step 4.3 is done:** the **visit recording API** (`POST /visits` auto-creates and
-auto-closes treatments; the project's **second role-split resource**). **Step 4.4 is done:** the
-**visit record screen** at `/patients/{id}/visits/new`, plus a read-only **`GET /treatments`** and
-visit history on the profile. **Step 4.5 is done:** the **treatment lifecycle** —
-`POST /treatments/{id}/close` + `/reopen` (the treatments router's **first write routes**) and
-Close/Reopen controls in a compact Treatments section on the profile. **Step 4.6 is done:** the
-**inline follow-up scheduler** on the visit form — after recording, it books the next appointment
-linked to the treatment (`appointment.treatment_id`, first use of that FK from the UI, and the
-**first booking-from-UI path** at all). **Step 4.7 is done:** the patient profile now shows
-**treatments each expandable to their nested visits** (merged from the old flat Treatments list +
-separate visit-history card; grouped **client-side**, no new endpoint). **Step 4.8 is done —
-PHASE 4'S FEATURE WORK IS COMPLETE:** the dashboard flags **open treatments with no next appointment**
-("the single most valuable report in the app", BUILD_PLAN §3) via **`GET /treatments/needs-follow-up`**
-+ a section at the top of `/`. The clinical loop is closed: record a visit → keep the treatment open
-→ if no follow-up is booked, the dashboard says so. Now **eight migrations** (head = `999215bea700`,
-unchanged since 4.2) and **eight models**. Two seed scripts: `app.seed` (admin) and
-`app.seed_patients` (dev patients). **130 backend tests pass.**
+**Where we are: Phases 0–4 are COMPLETE. Next is PHASE 5 — billing (start at step 5.1).**
 
-**Step 4.9 is done — PHASE 4 IS FULLY COMPLETE (features + infra).** The Phase-4 wrap added
-**clinic settings** (a singleton `clinic_settings` row: hours, slot size, timezone; migration
-`1c72084fac9c`, the **ninth**) and **actually applied the clinic timezone**: the appointments
-day/range query now bounds "a day" in the **clinic zone** (`clinic_day_bounds`), not UTC, and the
-calendar/dashboard render times in the clinic zone. `GET/PATCH /clinic-settings` (admin-write),
-`/settings/clinic` screen, `useClinicSettings` hook. **New frontend deps: `date-fns` + `date-fns-tz`**
-(backend uses stdlib `zoneinfo`). **The UTC-everywhere caveat carried since 3.3 is retired.** Migration
-head = **`1c72084fac9c`**; **nine models**. **143 backend tests pass.** Next is **Phase 5 (billing)**.
+- **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
+  verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
+- **Phase 2:** patients — model, CRUD API, list/search, profile + medical-notes banner, ~50 seeded.
+- **Phase 3:** appointments — model + FKs, booking API with **DB-enforced double-booking prevention**
+  (GiST EXCLUDE), day + week calendars with drag-drop reschedule, status workflow, dashboard v1 on `/`.
+- **Phase 4 (the clinical core):** treatment catalogue → the `treatment`/`visit`/`procedure_performed`
+  models → visit recording API (auto-creates+closes treatments) → visit screen → treatment lifecycle
+  (close/reopen) → inline follow-up scheduler → nested treatment history on the profile → the
+  **open-treatments-with-no-follow-up** dashboard flag → the **4.9 wrap**: clinic settings + a real
+  clinic timezone. The clinical loop works end to end.
+
+**Current facts a new session needs:**
+- **Migration head = `1c72084fac9c`** (the **ninth** migration, `clinic_settings`, 4.9).
+- **Nine models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
+  `treatment`, `visit`, `procedure_performed`, `clinic_settings`.
+- **Five `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`.
+- **143 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **Time is now clinic-zone, not UTC** — `list_appointments` uses `services/clinic.clinic_day_bounds`;
+  the frontend renders via `date-fns-tz` reading `clinic_settings.timezone`. The old UTC caveat is gone.
+
+**Phase 5 roadmap (BUILD_PLAN §10):** 5.1 `invoice` + `invoice_line` + `payment` models · 5.2 invoice
+generation from a visit's procedures · 5.3 payment capture + outstanding balance · 5.4 printable
+receipt · 5.5 dashboard: today's collections. **Start at 5.1 (models + migration).** Money stays
+`Numeric`/`Decimal`, never float (the 4.1 rule — invoices are the reason it exists). An `INVOICE` is
+**per-visit**, not per-treatment (ERD §9). The open 5.2 question is whether a `procedure_performed`
+should have snapshotted its price — decide it in 5.2 (see the standing-decisions table).
 
 **OPEN ITEMS** (deliberately deferred, don't lose these):
 | Item | What's owed | Where it bites |
