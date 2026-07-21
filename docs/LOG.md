@@ -15,8 +15,8 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–5 COMPLETE + the 5.6 interlude (patient file uploads) is done. Next is
-PHASE 6 — reports & local polish (start at 6.1).**
+**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports) done.
+Next is 6.2 (error/loading/empty-state polish).**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -34,9 +34,14 @@ PHASE 6 — reports & local polish (start at 6.1).**
 - **Thirteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
   `payment`, `patient_file`.
-- **Seven `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
-  `billing`, `storage`.
-- **207 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
+  `billing`, `storage`, `reports`.
+- **214 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **Reports exist** (6.1): `GET /reports` (**dentist/admin**) bundles revenue trend (6 months),
+  procedure mix (6 months, by revenue, tail→"Other"), and no-show rate (30 days) — all bucketed in the
+  **clinic zone** (`services/reports.py`, reusing `clinic_day_bounds`). Frontend `/reports` screen with
+  **Recharts** charts (`lib/use-reports.ts`, `lib/chart-theme.ts` = validated dataviz palette). The
+  "Reports" nav item (dentist/admin) now links there.
 - **New backend dep `python-multipart`** (5.6, for FastAPI file uploads). **Uploaded files live on a
   Docker named volume `uploads` at `UPLOAD_DIR=/data/uploads`** — NOT in Postgres; the DB keeps
   metadata + a `storage_key`. Storage goes through `services/storage.py` (`Storage` protocol +
@@ -265,6 +270,7 @@ the original step instructions say otherwise:
 | **Invoice is one-per-visit (UNIQUE) + the line freezes its price (5.1)** | ERD draws plain FKs | `invoice.visit_id` is a NOT NULL FK with a **UNIQUE** constraint — a second invoice for the same visit is impossible at the DB (ERD §9: per-visit), the same "DB is the guarantee" instinct as the appointment overlap constraint. **`invoice_line` snapshots `description` + `amount`**, frozen at generation (5.2); `treatment_item_id` is a **nullable** reporting-only link. This is the answer to the deferred price-snapshot question — an old invoice reads at the price charged then, not today's. So **5.2 must COPY name+price from `treatment_item` into the line**, not read it live. `payment` is a separate table (an invoice takes several part-payments). Statuses (`invoice.status`, `payment.mode`) are **app-level, no DB enum** — pinned via Pydantic `Literal` in 5.3. Money CHECKs (non-neg, `discount<=subtotal`) are hand-added in the migration (autogenerate emits none). | `backend/app/models/invoice.py`, `backend/app/models/invoice_line.py`, `backend/app/models/payment.py` |
 | **Invoice generation = `POST /visits/{id}/invoice`, server builds lines, biller may add custom ones (5.2)** | Roadmap says only "generate from visit procedures" | The **trigger hangs off the visit** but the resource is the invoice, so it lives on its own **`invoices` router** (no prefix; POST path `/visits/{visit_id}/invoice`, GET `/invoices/{id}`) + a **`billing` service** (6th module) that payments (5.3) + receipt (5.4) extend. Lines = **auto-seeded from the visit's `procedure_performed` rows** (name + current `default_price` COPIED in, frozen) **++ optional biller-typed `extra_lines`** (description + amount, `treatment_item_id` NULL). So a walk-in with zero recorded procedures can still be billed by hand — only a **totally empty** invoice (0 procedures AND 0 custom lines) is a **422**. Re-generate → **409** (friendly pre-check + IntegrityError backstop on the UNIQUE). **Any active staff** (billing is front-desk, NOT dentist-role-split — a test asserts a receptionist can generate). `billing.py` raises domain exceptions (`VisitNotFound`/`InvoiceAlreadyExists`/`NothingToInvoice`/`DiscountExceedsSubtotal`), router maps to HTTP + audits + commits (the 4.3 house pattern). No migration — 5.1's tables suffice. | `backend/app/routers/invoices.py`, `backend/app/services/billing.py`, `backend/app/schemas/invoice.py` |
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
+| **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
 | **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
 | **Today's collections = `GET /invoices/collections`, summed in the CLINIC zone (5.5)** | — | `billing.todays_collections` sums the day's `payment.amount` where `paid_at` is in the **clinic-local** today — it reads the tz from `clinic_settings` and bounds the day with `clinic_day_bounds` (the 4.9 helper), so a 9pm-IST payment counts for the right clinic day (the 4.9 fix, now for money). Returns `{date, total, count, by_mode}` with `by_mode` always carrying **all three modes** (cash/card/upi, 0.00 if none) for a stable card. Money is `.quantize(Decimal("0.01"))` (the 5.3 "0" vs "0.00" gotcha). **Route order:** `GET /invoices/collections` is declared **BEFORE** `GET /invoices/{invoice_id}` or "collections" parses as a UUID → 422 (the literal-before-`{id}` trap, same as 4.8's needs-follow-up; a test pins it). Any active staff. Dashboard card `app/todays-collections.tsx` on `/`. No migration/model/dep. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `frontend/app/todays-collections.tsx` |
 | **Billing UI + receipt (5.4): clinic identity on `clinic_settings`, print via `window.print()`** | Roadmap says only "printable receipt" | A receipt needs an invoice to exist, and there was **no billing UI** (5.2/5.3 were API-only) — so 5.4 built the whole flow: `/invoices/new/[visitId]` (generate: seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take payment), `/invoices/[id]/receipt` (print). Reached from **each visit row on the patient profile** via **`GET /visits/{visit_id}/invoice`** (new read, 404 = "no invoice yet" → "Generate" vs "View"; reuses the UNIQUE, no visit column added). **Clinic identity lives on `clinic_settings`** (`clinic_name` NOT NULL default 'Dental Clinic', nullable `address`/`phone`; migration `e8dbf0db4dec`, the 11th — autogenerated, the NOT NULL default backfills the singleton) — edited on `/settings/clinic`, printed on the receipt header. **Print = `window.print()` + a `.no-print` class + `@media print` in `globals.css`** — NO PDF lib, no new dep. `frontend/lib/use-invoices.ts` mirrors `use-visits.ts`; `formatMoney` = `Intl.NumberFormat("en-IN", INR)` on the decimal **string** (never float). Billing UI is **any-staff** (no role gate — the API is the guard). Added `useVisit` to `use-visits.ts`. | `frontend/lib/use-invoices.ts`, `frontend/app/invoices/`, `backend/app/models/clinic_settings.py`, `backend/app/routers/invoices.py` |
@@ -285,6 +291,68 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 6.1: practice reports (revenue trend, procedure mix, no-show rate)
+
+**Status:** complete — a reports aggregate service + `GET /reports` + a `/reports` screen with three
+Recharts charts, verified (214 backend tests pass; palette validated; lint + build green; full stack
+up; route live + role-split). **One new frontend dep (Recharts, approved), no migration.** For commit.
+Starts Phase 6.
+
+### Why this step
+The owner's "how's the practice doing" screen (BUILD_PLAN §6). All the data existed after Phase 5:
+payments (revenue), invoice_line (procedure mix), appointment status (no-show). The "Reports" nav item
+was a dentist/admin placeholder with no href since Phase 1 — 6.1 fills it in.
+
+### Scope decisions (confirmed with user)
+- **All three core reports** (revenue trend + procedure mix + no-show rate).
+- **Real charts**, rendered with **Recharts** (new frontend dep, user-approved), styled to the
+  **dataviz** skill's validated palette (theme-aware, one axis, single-series).
+- **Fixed windows:** revenue + procedure mix over the **last 6 months** (monthly), no-show over the
+  **last 30 days**. No date-picker (later/polish).
+- **`require_role("dentist","admin")`** — the owner's view. Bucketing in the **clinic timezone**.
+
+### Built — backend (no migration, no backend dep)
+- `app/services/reports.py` (**8th service module**) — `revenue_trend` (clinic-month sums, zero-filled),
+  `procedure_mix` (group `invoice_line` by item, order by revenue, fold tail→"Other"), `no_show_rate`
+  (counts by status, denominator excludes cancelled, safe on zero). Month/day windows built in the
+  clinic zone via `clinic_day_bounds`. Money quantized (the 5.3 rule).
+- `app/schemas/report.py` — `RevenuePoint` / `ProcedureMixRow` / `NoShowSummary` / `ReportsResponse`.
+- `app/routers/reports.py` — `GET /reports` (dentist/admin, `months`/`days` query params); registered
+  in `main.py`.
+- `tests/test_reports.py` (**new**, 7) — service unit tests (revenue buckets + zero-fill, mix
+  grouping/order, no-show denominator excludes cancelled, zero-appts safe) with the clinic tz pinned +
+  delta assertions, plus endpoint auth (receptionist 403, dentist 200 + shape). 207 → **214**.
+
+### Built — frontend (new dep: recharts@3.10.0)
+- `lib/chart-theme.ts` — the dataviz validated palette (light+dark), `useChartTheme()` (tracks the
+  `.dark` class + OS setting), `noShowColor` (status band). `lib/use-reports.ts` — `useReports()` +
+  `formatMonth`.
+- `app/reports/{page,reports-view}.tsx` — three sections: a **revenue area chart** (single blue series),
+  a **horizontal procedure-mix bar chart** (by revenue), and a **no-show stat tile** (big % in a status
+  color + counts). Loading/empty/error states. `role-nav.tsx` — "Reports" now has `href: "/reports"`.
+
+### Bug hit + fixed during build
+Recharts 3's `Tooltip` `formatter` has a strict signature (`ValueType | undefined`) — the build's
+type-check failed on a `(v: number) =>` formatter. Fixed by dropping the explicit `number` annotation
+and coercing with `String(v)` / optional chaining on the payload.
+
+### Verified
+- **214 backend tests pass** in-container; `GET /reports` live (**401** unauth; the role split is
+  test-proven: receptionist 403, dentist 200); clinic-zone bucketing test passes.
+- **Palette validated** — `validate_palette.js` on series-1 blue: all checks pass (light).
+- Frontend **lint + build green**; **Recharts resolves under React 19**; frontend image rebuilt; **full
+  stack up** through Caddy (`/` → 307).
+
+### What was NOT browser-clicked (honest note)
+The aggregates are API-proven (tests + live). The **three charts' browser render is the user's to click**
+(real auth): confirm the revenue area line, the procedure-mix bars, and the no-show tile read correctly,
+and that they recolor in dark mode. The "Reports" nav link now goes somewhere.
+
+### Suggested commit
+`feat: add practice reports`
 
 ---
 

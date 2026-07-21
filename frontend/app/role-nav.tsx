@@ -27,7 +27,7 @@ const NAV: NavItem[] = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Patients", icon: Users, href: "/patients" },
   { label: "Calendar", icon: CalendarDays, href: "/calendar" },
-  { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
+  { label: "Reports", icon: BarChart3, anyOf: ["dentist", "admin"], href: "/reports" },
   { label: "Treatments", icon: Shield, anyOf: ["admin"], href: "/settings/treatments" },
   { label: "Clinic settings", icon: Settings, anyOf: ["admin"], href: "/settings/clinic" },
 ];

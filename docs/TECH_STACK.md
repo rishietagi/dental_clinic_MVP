@@ -37,6 +37,7 @@ and is painful to trace. Local and container majors stay matched.
 | @tailwindcss/postcss | 4.x | The PostCSS plugin Tailwind 4 builds through. |
 | ESLint | 9.x | Linting, via `eslint-config-next`. |
 | shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`, `input`, `label`. |
+| recharts | 3.10.0 | Charts on the Reports screen (6.1) — React+SVG, React-19-compatible. Styled to the **dataviz** validated palette (`lib/chart-theme.ts`), theme-aware. First frontend charting dep. |
 
 ### Auth (Supabase) — added step 1.1
 

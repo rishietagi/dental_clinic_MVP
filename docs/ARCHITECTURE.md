@@ -159,11 +159,11 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of the 5.6 interlude there are thirteen models — `staff_user`, `audit_log`, `patient`,
-`appointment`, `treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`,
-`invoice`, `invoice_line`, `payment`, `patient_file` — and seven `app/services/` modules (`audit`,
-`appointments`, `visits`, `treatments`, `clinic`, `billing`, `storage`). The billing loop is complete
-(5.2–5.5); 5.6 added patient file uploads (X-rays/photos/documents).
+As of 6.1 there are thirteen models — `staff_user`, `audit_log`, `patient`, `appointment`,
+`treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
+`invoice_line`, `payment`, `patient_file` — and eight `app/services/` modules (`audit`, `appointments`,
+`visits`, `treatments`, `clinic`, `billing`, `storage`, `reports`). The billing loop is complete
+(5.2–5.5); 5.6 added patient file uploads; 6.1 added practice reports.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -299,6 +299,15 @@ API below).
   traversal/collision safety). `get_storage()` picks the backend from config, so **Phase 7 swaps in
   Supabase Storage / S3 by config, not call-site changes**. Keeping blobs out of Postgres keeps dumps
   small and the backend replaceable.
+- **`app/services/reports.py`** — the **eighth `services/` module** (6.1). Read-only aggregates for the
+  Reports screen: `revenue_trend` (payments summed per clinic-month, last 6, zero-filled),
+  `procedure_mix` (`invoice_line` grouped by item, ordered by revenue, tail folded to "Other"), and
+  `no_show_rate` (appointment-status counts over 30 clinic-days; denominator excludes cancelled; safe on
+  zero). All month/day windows are built in the **clinic timezone** via `clinic_day_bounds`, matching
+  the 5.5 collections rule. `app/routers/reports.py` exposes `GET /reports`
+  (`require_role("dentist","admin")` — the owner's view) bundling all three; the frontend `/reports`
+  screen renders them with **Recharts** (`frontend/lib/chart-theme.ts` holds the dataviz validated,
+  theme-aware palette). The "Reports" nav item (dentist/admin) links here.
 - **`app/routers/patient_files.py`** — the file API (5.6): `POST /patients/{id}/files` (multipart
   upload, **`require_role("dentist","admin")`** — clinical records are the dentist's, like visits;
   validates content-type→415 + size→413 before writing; archived patient→409; writes bytes-first then

@@ -489,7 +489,7 @@ and executed in Phase 7, once there's something worth deploying.
 | 5.6 | **Interlude — patient file uploads (X-rays, photos, documents).** Pulled forward from Phase 9 (was "Optional") at the user's request: it's core clinical functionality for software a dentist actually uses. Local disk volume behind a swappable storage interface; NOT charting/odontogram (still out of scope). | `feat: add patient file uploads` |
 
 ### PHASE 6 — Reports & local polish
-| 6.1 | Reports: revenue trend, procedure mix, no-show rate | `feat: add practice reports` |
+| 6.1 | Reports: revenue trend, procedure mix, no-show rate — **DONE** (`/reports`, Recharts, clinic-zone buckets, dentist/admin) | `feat: add practice reports` |
 | 6.2 | Error states, loading states, empty states | `feat: polish UI states` |
 | 6.3 | Demo run: show your mother, collect feedback, fix what's wrong | `fix: address usability feedback` |
 
@@ -510,6 +510,10 @@ The research spike you wanted. Do it *here*, with a real app to size.
 - VPS + Docker (Hetzner / DigitalOcean / Lightsail) — cheapest, most ops learning
 - PaaS (Render / Railway / Fly.io) — near-zero ops, ~2× cost
 - Postgres: Supabase vs Neon vs RDS Mumbai — free tiers, egress, India residency
+- **File storage for patient uploads (5.6):** Supabase Storage vs S3 (Mumbai) vs a VPS volume —
+  cost, egress, and **data residency for clinical images (X-rays)**. The app already isolates this
+  behind `services/storage.py` (`Storage` protocol), so going live means **implementing a cloud
+  `Storage` backend + config**, not touching call sites. Decide it here alongside the Postgres host.
 - Per option: monthly ₹, setup hours, maintenance hours/month, restore story
 
 > Milestone: live on HTTPS. **Parallel run with the vendor starts here.** Real patient data
