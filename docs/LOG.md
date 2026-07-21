@@ -15,8 +15,8 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports) done.
-Next is 6.2 (error/loading/empty-state polish).**
+**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports) + 6.2
+(UI redesign) done. Next is 6.3 (demo to the user + fix feedback).**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -37,6 +37,15 @@ Next is 6.2 (error/loading/empty-state polish).**
 - **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`.
 - **214 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **The app has a design system now** (6.2): warm/friendly redesign. Tokens in `app/globals.css`
+  (mint/teal primary, warm-sand neutrals, coral secondary, semantic status colors), **both themes** +
+  a **manual theme toggle** (`data-theme` on `<html>`, pre-paint script in `layout.tsx`, `localStorage`).
+  A persistent **app shell** (`components/app-shell.tsx` — clinic name, role-aware horizontal nav with
+  active highlight, theme toggle, sign-out) wraps every signed-in page via `layout.tsx`; `/login` opts
+  out. Shared **state components** (`components/states/` — `LoadingState`/`ErrorState`/`EmptyState`/
+  `Skeleton`), a **`StatusPill`** (`components/ui/status-pill.tsx`, semantic tone), and a **`PageHeader`**.
+  Pages no longer roll their own `<main>` (the shell provides it). `role-nav.tsx` + `sign-out-button.tsx`
+  are now superseded by the shell (dead but harmless).
 - **Reports exist** (6.1): `GET /reports` (**dentist/admin**) bundles revenue trend (6 months),
   procedure mix (6 months, by revenue, tail→"Other"), and no-show rate (30 days) — all bucketed in the
   **clinic zone** (`services/reports.py`, reusing `clinic_day_bounds`). Frontend `/reports` screen with
@@ -270,6 +279,7 @@ the original step instructions say otherwise:
 | **Invoice is one-per-visit (UNIQUE) + the line freezes its price (5.1)** | ERD draws plain FKs | `invoice.visit_id` is a NOT NULL FK with a **UNIQUE** constraint — a second invoice for the same visit is impossible at the DB (ERD §9: per-visit), the same "DB is the guarantee" instinct as the appointment overlap constraint. **`invoice_line` snapshots `description` + `amount`**, frozen at generation (5.2); `treatment_item_id` is a **nullable** reporting-only link. This is the answer to the deferred price-snapshot question — an old invoice reads at the price charged then, not today's. So **5.2 must COPY name+price from `treatment_item` into the line**, not read it live. `payment` is a separate table (an invoice takes several part-payments). Statuses (`invoice.status`, `payment.mode`) are **app-level, no DB enum** — pinned via Pydantic `Literal` in 5.3. Money CHECKs (non-neg, `discount<=subtotal`) are hand-added in the migration (autogenerate emits none). | `backend/app/models/invoice.py`, `backend/app/models/invoice_line.py`, `backend/app/models/payment.py` |
 | **Invoice generation = `POST /visits/{id}/invoice`, server builds lines, biller may add custom ones (5.2)** | Roadmap says only "generate from visit procedures" | The **trigger hangs off the visit** but the resource is the invoice, so it lives on its own **`invoices` router** (no prefix; POST path `/visits/{visit_id}/invoice`, GET `/invoices/{id}`) + a **`billing` service** (6th module) that payments (5.3) + receipt (5.4) extend. Lines = **auto-seeded from the visit's `procedure_performed` rows** (name + current `default_price` COPIED in, frozen) **++ optional biller-typed `extra_lines`** (description + amount, `treatment_item_id` NULL). So a walk-in with zero recorded procedures can still be billed by hand — only a **totally empty** invoice (0 procedures AND 0 custom lines) is a **422**. Re-generate → **409** (friendly pre-check + IntegrityError backstop on the UNIQUE). **Any active staff** (billing is front-desk, NOT dentist-role-split — a test asserts a receptionist can generate). `billing.py` raises domain exceptions (`VisitNotFound`/`InvoiceAlreadyExists`/`NothingToInvoice`/`DiscountExceedsSubtotal`), router maps to HTTP + audits + commits (the 4.3 house pattern). No migration — 5.1's tables suffice. | `backend/app/routers/invoices.py`, `backend/app/services/billing.py`, `backend/app/schemas/invoice.py` |
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
+| **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
 | **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
 | **Today's collections = `GET /invoices/collections`, summed in the CLINIC zone (5.5)** | — | `billing.todays_collections` sums the day's `payment.amount` where `paid_at` is in the **clinic-local** today — it reads the tz from `clinic_settings` and bounds the day with `clinic_day_bounds` (the 4.9 helper), so a 9pm-IST payment counts for the right clinic day (the 4.9 fix, now for money). Returns `{date, total, count, by_mode}` with `by_mode` always carrying **all three modes** (cash/card/upi, 0.00 if none) for a stable card. Money is `.quantize(Decimal("0.01"))` (the 5.3 "0" vs "0.00" gotcha). **Route order:** `GET /invoices/collections` is declared **BEFORE** `GET /invoices/{invoice_id}` or "collections" parses as a UUID → 422 (the literal-before-`{id}` trap, same as 4.8's needs-follow-up; a test pins it). Any active staff. Dashboard card `app/todays-collections.tsx` on `/`. No migration/model/dep. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `frontend/app/todays-collections.tsx` |
@@ -291,6 +301,69 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-21 — Step 6.2: UI polish + warm/friendly redesign
+
+**Status:** complete — a real design system (tokens, app shell, shared state components, status pills)
++ a warm/friendly restyle across the app, verified structurally (lint + build green; 214 backend tests
+still pass; full stack up). **No new deps, no backend change.** A **design-preview Artifact** was
+published for the user's eye. For commit. **This discharges the long-deferred "polish in Phase 6" note.**
+
+### Why this step
+The app worked but looked like a prototype: ~60 ad-hoc plain-text state strings across 17 files, no app
+shell (nav only on the dashboard), and the "real design pass" deferred since Phase 2. BUILD_PLAN 6.2 is
+the polish step; the user chose a **full visual redesign**, **warm & friendly**, with an **app shell**,
+reviewed in **one pass**.
+
+### Scope decisions (confirmed with user)
+- **Full redesign** (not just state-component extraction).
+- **Warm & friendly** aesthetic — grounded in a dental clinic: **mint/teal** primary (clean/clinical),
+  **warm-sand** neutrals (chosen, not defaulted), **coral** secondary. Deliberately NOT the generic AI
+  "cream + terracotta" look.
+- **App shell/header** with role-aware nav + a **theme toggle**.
+- **One pass**, stack left up + a **design-preview Artifact** for fast direction review.
+
+### Built
+- `app/globals.css` — rewrote the token blocks (light + `prefers-color-scheme: dark` + `data-theme`
+  overrides), **keeping shadcn token names** so all components re-skin; added semantic status tokens
+  (exposed via `@theme inline`), a skeleton-shimmer utility (reduced-motion-safe), kept the print rules.
+- `components/app-shell.tsx` (**new**) — sticky header (clinic name from `useClinicSettings`, horizontal
+  role-aware nav with active-route highlight via `usePathname`, theme toggle, sign-out) + centered
+  `<main>`; `/login` opts out. `app/layout.tsx` wraps children in it + a pre-paint theme script.
+- `components/states/index.tsx` (**new**) — `LoadingState`, `ErrorState`, `EmptyState`, `Skeleton`,
+  `SkeletonRows`. `components/ui/status-pill.tsx` (**new**) — semantic-tone pill (dot + wash + ink label,
+  never colour-alone). `components/page-header.tsx` (**new**) — consistent title/subtitle/action.
+- Screens: dropped every per-page `<main>` wrapper (11 route files → `<div>` + `PageHeader`), and swapped
+  the highest-traffic state strings + status displays for the shared components/pills (patient list,
+  invoice view, reports, needs-follow-up, dashboard). The rest reskinned automatically via the tokens.
+- Dashboard reflowed: collections + needs-follow-up in a 2-col grid up top; dev HealthCard muted at the
+  bottom.
+
+### Bug hit + fixed during build
+`react-hooks/set-state-in-effect` on the theme toggle (the recurring rule — 0.3/2.3/4.9). Fixed by
+making the **DOM `data-theme` stamp the source of truth** (read on render) instead of syncing it into
+React state via an effect; a tick counter forces the re-render after the flip.
+
+### Verified
+- Frontend **lint + build green**; **no new deps**; frontend Docker image rebuilt; **full stack up**
+  through Caddy (`/` → 307, `/login` → 200 bare/no-shell). **214 backend tests still pass** (untouched).
+- **Design-preview Artifact published** (palette, type scale, status pills, a mini dashboard, light+dark).
+
+### What was NOT verified by me (honest note — bigger than usual, this step is visual)
+Tests don't judge "looks good." I proved it **compiles + renders structurally**; whether the redesign
+**reads well and looks right is the user's call**. **Handed over — click-list (each in light AND dark
+via the header toggle):** dashboard, patient list + a profile, calendar day/week, an invoice + its
+receipt, reports (charts on the new surfaces), settings, and the theme toggle itself. The Artifact is a
+quick way to judge the direction before clicking the live app.
+
+### Carried forward → 6.3
+Demo to the user (your mother), collect feedback, fix what's wrong. `role-nav.tsx` +
+`sign-out-button.tsx` are now dead (superseded by the shell) — delete in 6.3 cleanup if desired.
+
+### Suggested commit
+`feat: redesign UI with app shell and design system` (or the roadmap's `feat: polish UI states`)
 
 ---
 

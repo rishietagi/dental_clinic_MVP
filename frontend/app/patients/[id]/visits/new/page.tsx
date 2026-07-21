@@ -13,8 +13,8 @@ export default async function NewVisitPage({
   const { id } = await params;
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-8">
+    <div className="mx-auto w-full max-w-2xl">
       <VisitForm patientId={id} />
-    </main>
+    </div>
   );
 }

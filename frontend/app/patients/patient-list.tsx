@@ -7,7 +7,9 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { EmptyState, ErrorState, SkeletonRows } from "@/components/states";
 import { Input } from "@/components/ui/input";
+import { StatusPill } from "@/components/ui/status-pill";
 import { usePatientSearch } from "@/lib/use-patient-search";
 
 export function PatientList() {
@@ -24,12 +26,10 @@ export function PatientList() {
         aria-label="Search patients"
       />
 
-      {state.kind === "loading" && (
-        <p className="text-sm text-muted-foreground">Searching…</p>
-      )}
+      {state.kind === "loading" && <SkeletonRows rows={5} />}
 
       {state.kind === "error" && (
-        <p className="text-sm text-destructive">Couldn’t load patients: {state.message}</p>
+        <ErrorState message={`Couldn’t load patients: ${state.message}`} />
       )}
 
       {state.kind === "ready" && (
@@ -39,11 +39,14 @@ export function PatientList() {
           </p>
 
           {state.data.items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No patients found.</p>
+            <EmptyState
+              title="No patients found"
+              hint={query ? "Try a different name or phone number." : "Patients you add will show up here."}
+            />
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
-                <thead className="border-b bg-muted/50 text-left text-muted-foreground">
+                <thead className="border-b bg-muted/40 text-left text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 font-medium">Name</th>
                     <th className="px-3 py-2 font-medium">Phone</th>
@@ -53,22 +56,22 @@ export function PatientList() {
                 </thead>
                 <tbody>
                   {state.data.items.map((p) => (
-                    <tr key={p.id} className="border-b last:border-0">
+                    <tr key={p.id} className="border-b last:border-0 hover:bg-muted/30">
                       <td className="px-3 py-2">
                         <Link
                           href={`/patients/${p.id}`}
-                          className="font-medium hover:underline"
+                          className="font-medium text-primary hover:underline"
                         >
                           {p.name}
                         </Link>
                         {p.archived && (
-                          <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                          <StatusPill tone="neutral" dot={false} className="ml-2">
                             archived
-                          </span>
+                          </StatusPill>
                         )}
                       </td>
                       <td className="px-3 py-2">{p.phone ?? "—"}</td>
-                      <td className="px-3 py-2">{p.age ?? "—"}</td>
+                      <td className="px-3 py-2 tabular-nums">{p.age ?? "—"}</td>
                       <td className="px-3 py-2">{p.gender ?? "—"}</td>
                     </tr>
                   ))}

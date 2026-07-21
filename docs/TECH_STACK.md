@@ -39,6 +39,17 @@ and is painful to trace. Local and container majors stay matched.
 | shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`, `input`, `label`. |
 | recharts | 3.10.0 | Charts on the Reports screen (6.1) — React+SVG, React-19-compatible. Styled to the **dataviz** validated palette (`lib/chart-theme.ts`), theme-aware. First frontend charting dep. |
 
+### Design system (6.2)
+
+The UI has a real token system as of 6.2 — **no new dependency**, built on the existing Tailwind 4 +
+shadcn setup. Colour/radius tokens live in `app/globals.css` (`:root` = warm-sand/mint light theme,
+`@media (prefers-color-scheme: dark)` = dark, plus `:root[data-theme]` overrides so a manual toggle wins
+over the OS). **Shadcn's token names were kept** (`--primary`, `--card`, `--accent`, `--border`, …) so
+components re-skin without markup changes; semantic status tokens (`--good`/`--warning`/`--danger`) are
+exposed to Tailwind via `@theme inline`. Shared UI: `components/app-shell.tsx` (header/nav/theme toggle),
+`components/states/` (loading/error/empty/skeleton), `components/ui/status-pill.tsx`,
+`components/page-header.tsx`. Fonts stay **Geist** via `next/font` (no webfont CDN).
+
 ### Auth (Supabase) — added step 1.1
 
 | Choice | Version | Why |

@@ -480,6 +480,21 @@ The frontend mirrors the transition map + labels + colours in `lib/appointment-s
 offers only legal buttons — the API is still the real guard). The **day view** shows coloured status
 pills plus per-appointment status buttons; the **week view** colours its cards by status.
 
+### Design system + app shell (6.2)
+
+As of 6.2 the frontend has a real design system (warm/friendly, no new dep). Colour/radius **tokens**
+live in `app/globals.css` — a light `:root`, a `@media (prefers-color-scheme: dark)` block, and
+`:root[data-theme]` overrides so a **manual theme toggle** wins over the OS. Shadcn's token *names* were
+kept, so every existing component re-skinned without markup changes. A persistent **app shell**
+(`components/app-shell.tsx`) renders the header — clinic name, role-aware horizontal nav with an
+active-route highlight (`usePathname`), a theme toggle (stamps `data-theme` + `.dark`, pre-painted by a
+script in `layout.tsx` to avoid a flash), and sign-out — and a centered `<main>`; it wraps every
+signed-in page via `layout.tsx`, and `/login` opts out by pathname. So individual pages no longer roll
+their own `<main>`/nav; they render content + a shared `PageHeader`. Shared **state components**
+(`components/states/`: `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton`) and a **`StatusPill`**
+(`components/ui/status-pill.tsx`, semantic tone kept separate from the brand accent) replaced the ad-hoc
+per-screen strings. `app/role-nav.tsx` and `app/sign-out-button.tsx` are superseded by the shell.
+
 ### Frontend patient page + first navigation (2.3)
 
 `/patients` (`app/patients/`) is the first patient-facing screen: a debounced search box

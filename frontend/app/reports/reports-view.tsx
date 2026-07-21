@@ -19,6 +19,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { noShowColor, useChartTheme } from "@/lib/chart-theme";
 import { formatMoney } from "@/lib/use-invoices";
@@ -34,10 +35,10 @@ export function ReportsView() {
   const state = useReports();
 
   if (state.kind === "loading") {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <LoadingState label="Loading reports…" />;
   }
   if (state.kind === "error") {
-    return <p className="text-sm text-destructive">Couldn’t load reports: {state.message}</p>;
+    return <ErrorState message={`Couldn’t load reports: ${state.message}`} />;
   }
 
   const { revenue_trend, procedure_mix, no_show } = state.data;

@@ -10,9 +10,11 @@
 import { useState } from "react";
 import Link from "next/link";
 
+import { ErrorState, LoadingState } from "@/components/states";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StatusPill, type Tone } from "@/components/ui/status-pill";
 import {
   formatMoney,
   recordPayment,
@@ -29,23 +31,23 @@ const controlClass =
   "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] " +
   "focus-visible:ring-ring/50";
 
-function statusClass(status: string): string {
-  if (status === "paid") return "text-emerald-600";
-  if (status === "partially_paid") return "text-amber-600";
-  return "text-muted-foreground";
+function statusTone(status: string): Tone {
+  if (status === "paid") return "good";
+  if (status === "partially_paid") return "warning";
+  return "neutral";
 }
 
 export function InvoiceView({ invoiceId }: { invoiceId: string }) {
   const state = useInvoice(invoiceId);
 
   if (state.kind === "loading") {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <LoadingState label="Loading invoice…" />;
   }
   if (state.kind === "not-found") {
     return <p className="text-sm text-muted-foreground">Invoice not found.</p>;
   }
   if (state.kind === "error") {
-    return <p className="text-sm text-destructive">Couldn’t load the invoice: {state.message}</p>;
+    return <ErrorState message={`Couldn’t load the invoice: ${state.message}`} />;
   }
 
   return <Loaded invoice={state.invoice} refetch={state.refetch} />;
@@ -93,9 +95,9 @@ function Loaded({ invoice, refetch }: { invoice: Invoice; refetch: () => void })
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span>Charges</span>
-            <span className={`text-sm font-medium ${statusClass(invoice.status)}`}>
+            <StatusPill tone={statusTone(invoice.status)}>
               {statusLabel(invoice.status)}
-            </span>
+            </StatusPill>
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">

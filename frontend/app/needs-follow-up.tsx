@@ -12,6 +12,7 @@
 
 import Link from "next/link";
 
+import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { useNeedsFollowUp } from "@/lib/use-treatments";
 import { formatVisitDate } from "@/lib/use-visits";
 
@@ -24,20 +25,17 @@ export function NeedsFollowUp() {
         Treatments needing a follow-up
       </h2>
 
-      {state.kind === "loading" && (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      )}
+      {state.kind === "loading" && <LoadingState label="Loading…" />}
 
       {state.kind === "error" && (
-        <p className="text-sm text-destructive">
-          Couldn’t load the report: {state.message}
-        </p>
+        <ErrorState message={`Couldn’t load the report: ${state.message}`} />
       )}
 
       {state.kind === "ready" && state.data.total === 0 && (
-        <p className="text-sm text-muted-foreground">
-          All open treatments have a follow-up booked.
-        </p>
+        <EmptyState
+          title="All caught up"
+          hint="Every open treatment has a follow-up booked."
+        />
       )}
 
       {state.kind === "ready" && state.data.total > 0 && (
