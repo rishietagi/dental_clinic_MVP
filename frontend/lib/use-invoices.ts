@@ -159,6 +159,64 @@ export function useTodaysCollections(): CollectionsState & { refetch: () => void
   return { ...state, refetch };
 }
 
+// All invoices, for the Invoices ledger page (6.4).
+export type InvoiceListItem = {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  total: string;
+  amount_paid: string;
+  outstanding: string;
+  status: string;
+  created_at: string;
+};
+
+type InvoiceListState =
+  | { kind: "loading" }
+  | { kind: "ready"; items: InvoiceListItem[]; total: number }
+  | { kind: "error"; message: string };
+
+export function useInvoiceList(statusFilter?: string): InvoiceListState & { refetch: () => void } {
+  const [state, setState] = useState<InvoiceListState>(
+    apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
+  );
+  const [nonce, setNonce] = useState(0);
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      if (!cancelled) setState({ kind: "loading" });
+      try {
+        const headers = await authHeaders();
+        if (!headers) throw new Error("Not signed in.");
+
+        const url = new URL(`${apiUrl}/invoices`);
+        if (statusFilter) url.searchParams.set("status", statusFilter);
+
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+
+        const data = (await res.json()) as { items: InvoiceListItem[]; total: number };
+        if (!cancelled) setState({ kind: "ready", items: data.items, total: data.total });
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Could not load invoices.";
+          setState({ kind: "error", message });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [statusFilter, nonce]);
+
+  return { ...state, refetch };
+}
+
 // The invoice for a visit, or "none" if it hasn't been generated yet. The patient
 // profile uses this per visit to choose "Generate invoice" vs "View invoice".
 type VisitInvoiceState =

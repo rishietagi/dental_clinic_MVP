@@ -10,6 +10,14 @@ import { useState } from "react";
 import { EmptyState, ErrorState, SkeletonRows } from "@/components/states";
 import { Input } from "@/components/ui/input";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { usePatientSearch } from "@/lib/use-patient-search";
 
 export function PatientList() {
@@ -44,20 +52,20 @@ export function PatientList() {
               hint={query ? "Try a different name or phone number." : "Patients you add will show up here."}
             />
           ) : (
-            <div className="overflow-x-auto rounded-xl border bg-card">
-              <table className="w-full text-sm">
-                <thead className="border-b bg-muted/40 text-left text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">Phone</th>
-                    <th className="px-3 py-2 font-medium">Age</th>
-                    <th className="px-3 py-2 font-medium">Gender</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Age</TableHead>
+                    <TableHead>Gender</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {state.data.items.map((p) => (
-                    <tr key={p.id} className="border-b last:border-0 hover:bg-muted/30">
-                      <td className="px-3 py-2">
+                    <TableRow key={p.id}>
+                      <TableCell>
                         <Link
                           href={`/patients/${p.id}`}
                           className="font-medium text-primary hover:underline"
@@ -69,14 +77,14 @@ export function PatientList() {
                             archived
                           </StatusPill>
                         )}
-                      </td>
-                      <td className="px-3 py-2">{p.phone ?? "—"}</td>
-                      <td className="px-3 py-2 tabular-nums">{p.age ?? "—"}</td>
-                      <td className="px-3 py-2">{p.gender ?? "—"}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{p.phone ?? "—"}</TableCell>
+                      <TableCell className="tabular-nums">{p.age ?? "—"}</TableCell>
+                      <TableCell>{p.gender ?? "—"}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </>

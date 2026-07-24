@@ -238,6 +238,18 @@
 
 /* --- Design utilities (6.2) --- */
 
+/* Subtle page-content fade-in on route change. Off for reduced-motion. */
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: page-fade-in 0.28s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-enter { animation: none; }
+}
+
 /* Skeleton shimmer for loading placeholders; still for reduced-motion. */
 @keyframes skeleton-shimmer {
   0% { background-position: -200% 0; }

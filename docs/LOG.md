@@ -38,10 +38,22 @@ done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
   `payment`, `patient_file`.
 - **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`.
-- **228 backend tests pass.** Three seed scripts: `app.seed` (admin), `app.seed_patients` (dev
+- **239 backend tests pass.** Three seed scripts: `app.seed` (admin), `app.seed_patients` (dev
   patients), **`app.seed_demo`** (full demo dataset — dentists/appts/visits/invoices/payments/files, 6.3).
-- **Routers include `/staff`** (dentist directory, `GET /staff?role=dentist`, 6.3) for the booking/visit
-  dentist dropdowns.
+- **`/staff` now has writes** (6.5): `POST /staff` (create a **name-only** dentist record, admin-only,
+  409 on dup email), `POST /staff/{id}/deactivate|activate` (soft, admin-only), `?include_inactive=`.
+  Dentists are **records, NOT logins** — the app runs under a shared receptionist login.
+- **Reports are broken down by dentist** (6.5): `GET /reports?dentist_id=` narrows revenue/mix/no-show
+  to one dentist (attribution = the visit's primary dentist), and the response carries a `by_dentist`
+  breakdown (revenue + visit count per dentist, "Unassigned" fold). Managed on `/settings/clinic`.
+- **Routers include `/staff`** (dentist directory, `GET /staff?role=dentist`, 6.3) and **`GET /invoices`**
+  (the invoices ledger list — patient name + balance per row, `?status=` filter + paging, 6.4). Declared
+  before `/invoices/{id}`.
+- **Frontend uses a shadcn component set + sonner toasts** (6.4): `table`, `dialog`, `dropdown-menu`,
+  `tabs`, `tooltip`, `badge`, `separator`, `sonner` (Toaster in `layout.tsx`, reads the app's `data-theme`
+  stamp — NOT next-themes). New deps: `sonner` (+ `next-themes` pulled in but unused). Clinic **logo** at
+  `frontend/public/clinic-logo.png`, shown top-left in the sidebar. **Invoices** nav page at `/invoices`.
+  Clicking an appointment (dashboard/calendar) routes to the **chairside** screen.
 - **The app is now usable as a clinic tool** (6.3): a **left-sidebar** app shell + full-width layout;
   a **New patient** screen (`/patients/new`) + **Schedule appointment** screen (`/appointments/new`),
   reached from **quick-action buttons** on the dashboard/patients/calendar (before this the app had no
@@ -296,6 +308,7 @@ the original step instructions say otherwise:
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
+| **Dentists are name-only records, not logins — shared-login model (6.5)** | staff_user.id = Supabase UUID; "add dentist" sounds like "create login" | The clinic runs the app under a **single shared receptionist login**; dentists don't each sign in. So `POST /staff` creates a `staff_user` row with a **random local UUID** (name + email as info, role dentist) purely to **assign** on appointments/visits and **attribute** in reports — **no Supabase Auth call, no migration**. This is the exception to "staff_user.id IS the Supabase Auth UUID" (true for the seeded admin who does log in). Soft **deactivate** (never delete — history resolves), admin-only writes. If a dentist ever needs to actually log in, that's a separate Supabase step (out of scope). **Reports break down by dentist** via the visit's primary `dentist_id` (`?dentist_id=` filter + a `by_dentist` block). | `backend/app/routers/staff.py`, `backend/app/services/reports.py` |
 | **Consulting (second) dentist + the view structure + `/staff` (6.3)** | Single `dentist_id`; no add-patient/booking UI; no `/staff` | Dental handoff (dentist A checks, hands treatment to dentist B) → **`consulting_dentist_id` FK on BOTH `appointment` AND `visit`** (nullable/optional; the visit is the permanent record so it's captured there too), migration `19b4e1314059` (13th; **name the FKs by hand** — the unnamed-drop downgrade trap). Labels **Primary dentist / Consulting dentist**. New **`GET /staff?role=`** (any active staff; id/name/roles only) feeds the dentist dropdowns. The app got its missing **views + entry points**: `/patients/new`, `/appointments/new`, quick-action buttons on dashboard/patients/calendar, and a **chairside flow** — day-view **Start visit** (`?appointment=<id>` prefill; appointment id in the query is NOT a patient id, so the no-PII rule holds) → visit form (+ consulting dentist) → **Save & draft invoice** → the 5.2 generate screen. **`app/seed_demo.py`** seeds a full demo dataset (idempotent via an audit marker). No new deps. | `backend/app/models/appointment.py`, `backend/app/models/visit.py`, `backend/app/routers/staff.py`, `frontend/app/appointments/new/`, `frontend/app/patients/new/`, `backend/app/seed_demo.py` |
 | **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
 | **Today's collections = `GET /invoices/collections`, summed in the CLINIC zone (5.5)** | — | `billing.todays_collections` sums the day's `payment.amount` where `paid_at` is in the **clinic-local** today — it reads the tz from `clinic_settings` and bounds the day with `clinic_day_bounds` (the 4.9 helper), so a 9pm-IST payment counts for the right clinic day (the 4.9 fix, now for money). Returns `{date, total, count, by_mode}` with `by_mode` always carrying **all three modes** (cash/card/upi, 0.00 if none) for a stable card. Money is `.quantize(Decimal("0.01"))` (the 5.3 "0" vs "0.00" gotcha). **Route order:** `GET /invoices/collections` is declared **BEFORE** `GET /invoices/{invoice_id}` or "collections" parses as a UUID → 422 (the literal-before-`{id}` trap, same as 4.8's needs-follow-up; a test pins it). Any active staff. Dashboard card `app/todays-collections.tsx` on `/`. No migration/model/dep. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `frontend/app/todays-collections.tsx` |
@@ -317,6 +330,118 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-24 — Step 6.5: manage dentists (Settings) + by-dentist report analytics
+
+**Status:** complete — a Settings section to **add/list/deactivate dentists** + **reports broken down
+by dentist** (per-dentist table + a dentist filter on the charts). 239 backend tests pass; lint + build
+green; stack up. **No migration, no new deps.** For commit.
+
+### Key model decision (confirmed with user — a standing decision)
+The app is operated by the receptionist on **shared clinic PCs**; **dentists are NOT separate logins**.
+So "add a dentist" creates a **name-only `staff_user` record** (name + email as info, generated local
+UUID) used purely for assignment on appointments/visits and attribution in reports — **no Supabase Auth
+involvement, no migration** (`staff_user` already has name/email/roles/active). A staff row's id is
+normally the Supabase UUID (the seeded admin), but these created records get a random UUID since they
+never log in.
+
+### Built — backend (no migration)
+- `routers/staff.py` — `POST /staff` (create, `require_role("admin")`, 409 on duplicate email, audited),
+  `POST /staff/{id}/deactivate|activate` (soft, admin-only, audited), `GET /staff?include_inactive=`.
+  `StaffCreate` schema; `StaffSummary` gained `email` + `active`.
+- `services/reports.py` — `revenue_by_dentist(months)` (payments+visits grouped by the visit's primary
+  dentist, "Unassigned" fold, revenue-desc); `revenue_trend`/`procedure_mix`/`no_show_rate` gained an
+  optional `dentist_id` filter (via the invoice→visit join, or `appointment.dentist_id` for no-show).
+  `GET /reports?dentist_id=` threads it; response gains `by_dentist`. `DentistRevenueRow` schema.
+- Tests: staff create/dup-409/deactivate-hides/receptionist-403; revenue_by_dentist grouping; the
+  dentist filter narrows the trend (delta-based, robust to coexisting data — the 6.4 lesson). Updated
+  the report-shape test for the new `by_dentist` key. 232 → **239**.
+
+### Built — frontend
+- `lib/use-staff.ts` — `StaffMember` gained email/active; `useStaffList`, `createStaff`, `setStaffActive`.
+- `app/settings/clinic/staff-section.tsx` (**new**) — a **Staff & dentists** card on the settings page
+  (admin-only): a shadcn-Table list (name/email/roles/active) with Deactivate/Reactivate + an Add form
+  (name, email, role→dentist default), toasts on add/toggle.
+- `lib/use-reports.ts` — `useReports(dentistId?)`; `Reports` gained `by_dentist`.
+- `app/reports/reports-view.tsx` — a **dentist filter** dropdown (All / each dentist) that refetches
+  with `dentist_id` (narrows the three charts), plus a **By dentist** table (revenue + visits per
+  dentist, always the full comparison).
+
+### Verified
+- **239 backend tests pass**; `POST /staff` + `GET /reports` live (401 unauth). Frontend lint + build
+  green; both images rebuilt; **full stack up**. Demo data has 2 dentists with visits/invoices, so the
+  manage list + by-dentist report have content.
+
+### What was NOT verified by me (honest note)
+API + aggregates are test-proven. The **Settings staff UI + the Reports by-dentist UI are the user's to
+click** (real auth): add a dentist on Settings → see it in the booking/visit dropdowns and the report;
+filter Reports by a dentist and watch the charts narrow; deactivate one and confirm it leaves the
+dropdowns.
+
+### Suggested commit
+`feat: manage dentists and add by-dentist analytics`
+
+---
+
+## 2026-07-24 — Step 6.4: logo, appointment→chairside routing, Invoices ledger, component-library UI upgrade
+
+**Status:** complete — more demo feedback: the clinic **logo** top-left, clicking an appointment routes
+straight to the **chairside** screen (dashboard + calendar), a new **Invoices** ledger page (+ list
+endpoint), and a **component-library visual upgrade** (shadcn table/dialog/dropdown/tabs/tooltip/badge +
+**sonner** toasts). 232 backend tests pass; lint + build green; stack up + seeded. **One new endpoint,
+no migration, new frontend deps (`sonner`).** For commit.
+
+### Scope decisions (confirmed with user)
+- Appointment click → `/patients/[id]/visits/new?appointment=<id>` (chairside; ends in Save & draft
+  invoice). Patient-name link still → profile.
+- **Approved deps:** shadcn components (copied into `components/ui`, not versioned) + **sonner** (+ Radix
+  primitives). All in one pass.
+
+### Built — backend (no migration)
+- **`GET /invoices`** (`routers/invoices.py`, before `/invoices/{id}` — literal-before-`{id}`): every
+  invoice newest-first with patient name + `total`/`amount_paid`/`outstanding`/`status`, `?status=`
+  filter + `limit`/`offset`. `InvoiceListItem`/`InvoiceListResponse` schemas. Tests: list + patient name
+  + balances, status filter, auth, not-shadowed. 228 → **232**.
+
+### Built — frontend
+- **Component library:** `npx shadcn add dialog dropdown-menu tabs table tooltip badge separator sonner`.
+  `<Toaster/>` in `layout.tsx`; the sonner component **reads the app's `data-theme` stamp** (rewritten to
+  drop the next-themes `useTheme`, which would fight our custom toggle). Toasts on book/register/payment.
+- **Logo:** `RN dental clinic logo.png` → `public/clinic-logo.png`, rendered top-left in the sidebar
+  (`app-shell.tsx`) via next/image (replaced the text monogram). New **Invoices** nav item.
+- **Invoices page:** `lib/use-invoices.ts` `useInvoiceList`; `app/invoices/page.tsx` + `invoices-list.tsx`
+  — a shadcn-Table ledger (date, patient→profile, total/paid/outstanding, status pill), status-filter
+  chips, row→invoice.
+- **Appointment routing:** dashboard (`today-dashboard.tsx`) + calendar day-view rows are clickable →
+  chairside (`?appointment=<id>`); patient name still → profile (stopPropagation). Both restyled to
+  shadcn Table + status pills.
+- **Visual upgrade:** shadcn Table across dashboard/patients/invoices; stat tiles reworked; status as
+  `StatusPill` everywhere; a subtle page-fade on navigation (`.page-enter`, reduced-motion-safe);
+  toasts. Tokens unchanged (the 6.2 warm/mint system honored, both themes).
+
+### Test-isolation fix (worth remembering)
+Running `app.seed_demo` against the **shared compose `clinic` DB** (tests + seed use the same DB) made
+`test_procedure_mix` fail — its low-value (₹500) item got folded into "Other" by the seed's 27 extra
+invoice-lines. The test assumed it owned the DB. **Fixed the test to be robust** (assert the high-value
+RCT is top-N + correct; only assert the cleaning's rank/value WHEN it's present by name) rather than
+weaken it — a report test that only works on an empty DB is genuinely fragile; real data would break it
+too. Not a product bug.
+
+### Verified
+- **232 backend tests pass**; `/invoices` live (401 unauth, not shadowed). Frontend **lint + build
+  green** with the new deps; both Docker images rebuilt; **full stack up**; `/clinic-logo.png` → 200;
+  demo data present so every screen (incl. the Invoices ledger) has content.
+
+### What was NOT verified by me (honest note — the look is subjective)
+The API + routing are test-proven and the UI builds/renders. **The visual quality + the click-through
+are the user's to judge** (real auth): logo top-left; click an appointment on dashboard AND calendar →
+chairside → record → draft invoice; the Invoices ledger with the demo bills + status filter; toasts on
+booking/registering/paying; both themes via the toggle.
+
+### Suggested commit
+`feat: add invoices ledger, appointment routing, clinic logo, and component-library UI upgrade`
 
 ---
 

@@ -12,6 +12,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,6 +80,7 @@ export function NewAppointmentForm() {
     setBusy(false);
 
     if (result === "ok") {
+      toast.success("Appointment booked");
       router.push("/calendar");
       return;
     }

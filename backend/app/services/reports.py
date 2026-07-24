@@ -29,7 +29,9 @@ from app.models.clinic_settings import ClinicSettings
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
 from app.models.payment import Payment
+from app.models.staff_user import StaffUser
 from app.models.treatment_item import TreatmentItem
+from app.models.visit import Visit
 from app.services.clinic import clinic_day_bounds
 
 _CENTS = Decimal("0.01")
@@ -80,27 +82,34 @@ def _month_bounds_utc(month_start: date, tz_name: str) -> tuple[datetime, dateti
     return start, end
 
 
-def revenue_trend(db: Session, months: int = 6) -> list[dict]:
+def revenue_trend(db: Session, months: int = 6, dentist_id=None) -> list[dict]:
     """Collected revenue per clinic-month for the last `months` months.
 
     Every month in the window is present, including zero months, so the trend line
     has no gaps. `month` is a `YYYY-MM` string; `total` is a quantized Decimal.
+    When `dentist_id` is given, only payments on invoices whose visit's PRIMARY
+    dentist is that dentist are counted (attribution = the visit's dentist).
     """
     tz_name = _clinic_tz(db)
     today = datetime.now(ZoneInfo(tz_name)).date()
     out: list[dict] = []
     for ms in _month_starts(today, months):
         start, end = _month_bounds_utc(ms, tz_name)
-        total = db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.paid_at >= start, Payment.paid_at <= end
-            )
+        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.paid_at >= start, Payment.paid_at <= end
         )
+        if dentist_id is not None:
+            stmt = (
+                stmt.join(Invoice, Payment.invoice_id == Invoice.id)
+                .join(Visit, Invoice.visit_id == Visit.id)
+                .where(Visit.dentist_id == dentist_id)
+            )
+        total = db.scalar(stmt)
         out.append({"month": f"{ms.year:04d}-{ms.month:02d}", "total": _cents(total)})
     return out
 
 
-def procedure_mix(db: Session, months: int = 6) -> list[dict]:
+def procedure_mix(db: Session, months: int = 6, dentist_id=None) -> list[dict]:
     """Billed procedures over the last `months`, grouped by catalogue item.
 
     Groups **invoice_line** (the frozen record of what was charged) by
@@ -113,7 +122,7 @@ def procedure_mix(db: Session, months: int = 6) -> list[dict]:
     window_start, _ = _month_bounds_utc(_month_starts(today, months)[0], tz_name)
     _, window_end = _month_bounds_utc(_month_starts(today, months)[-1], tz_name)
 
-    rows = db.execute(
+    stmt = (
         select(
             TreatmentItem.name,
             func.count(InvoiceLine.id),
@@ -124,7 +133,12 @@ def procedure_mix(db: Session, months: int = 6) -> list[dict]:
         .outerjoin(TreatmentItem, InvoiceLine.treatment_item_id == TreatmentItem.id)
         .where(Invoice.created_at >= window_start, Invoice.created_at <= window_end)
         .group_by(TreatmentItem.name)
-    ).all()
+    )
+    if dentist_id is not None:
+        stmt = stmt.join(Visit, Invoice.visit_id == Visit.id).where(
+            Visit.dentist_id == dentist_id
+        )
+    rows = db.execute(stmt).all()
 
     # name is None for custom lines (no catalogue link) — label them.
     items = [
@@ -146,13 +160,14 @@ def procedure_mix(db: Session, months: int = 6) -> list[dict]:
     return head + [other]
 
 
-def no_show_rate(db: Session, days: int = 30) -> dict:
+def no_show_rate(db: Session, days: int = 30, dentist_id=None) -> dict:
     """No-show rate over the last `days` clinic-days.
 
     Denominator is scheduled appointments that were NOT cancelled
     (booked/arrived/done/no_show) — a cancellation isn't a no-show, so it doesn't
     count against attendance. Rate is a percentage (0-100), quantized to 1 decimal.
-    A period with no appointments returns rate 0 (never a divide-by-zero).
+    A period with no appointments returns rate 0 (never a divide-by-zero). When
+    `dentist_id` is given, only that dentist's appointments count.
     """
     tz_name = _clinic_tz(db)
     today = datetime.now(ZoneInfo(tz_name)).date()
@@ -162,13 +177,14 @@ def no_show_rate(db: Session, days: int = 30) -> dict:
     _, end = clinic_day_bounds(today, tz_name)
 
     in_window = (Appointment.start_time >= start) & (Appointment.start_time <= end)
-    counts = dict(
-        db.execute(
-            select(Appointment.status, func.count(Appointment.id))
-            .where(in_window)
-            .group_by(Appointment.status)
-        ).all()
+    stmt = (
+        select(Appointment.status, func.count(Appointment.id))
+        .where(in_window)
+        .group_by(Appointment.status)
     )
+    if dentist_id is not None:
+        stmt = stmt.where(Appointment.dentist_id == dentist_id)
+    counts = dict(db.execute(stmt).all())
 
     no_show = counts.get("no_show", 0)
     done = counts.get("done", 0)
@@ -186,3 +202,65 @@ def no_show_rate(db: Session, days: int = 30) -> dict:
         "cancelled": cancelled,
         "rate": rate,
     }
+
+
+def revenue_by_dentist(db: Session, months: int = 6) -> list[dict]:
+    """Revenue collected + visits recorded per dentist over the last `months`.
+
+    Attribution is the **visit's primary dentist** (how visits are recorded).
+    Revenue = payments on that visit's invoice, in the window; visits = distinct
+    visits in the window. Payments/visits with no attributable dentist fold into an
+    "Unassigned" row. Ordered by revenue desc. Money is quantized Decimal.
+    """
+    tz_name = _clinic_tz(db)
+    today = datetime.now(ZoneInfo(tz_name)).date()
+    window_start, _ = _month_bounds_utc(_month_starts(today, months)[0], tz_name)
+    _, window_end = _month_bounds_utc(_month_starts(today, months)[-1], tz_name)
+
+    # Revenue per dentist: sum payments joined through invoice -> visit -> dentist.
+    rev_rows = db.execute(
+        select(
+            Visit.dentist_id,
+            StaffUser.name,
+            func.coalesce(func.sum(Payment.amount), 0),
+        )
+        .select_from(Payment)
+        .join(Invoice, Payment.invoice_id == Invoice.id)
+        .join(Visit, Invoice.visit_id == Visit.id)
+        .outerjoin(StaffUser, Visit.dentist_id == StaffUser.id)
+        .where(Payment.paid_at >= window_start, Payment.paid_at <= window_end)
+        .group_by(Visit.dentist_id, StaffUser.name)
+    ).all()
+
+    # Visit counts per dentist in the window (by visit_date).
+    visit_rows = db.execute(
+        select(Visit.dentist_id, func.count(Visit.id))
+        .where(Visit.visit_date >= window_start, Visit.visit_date <= window_end)
+        .group_by(Visit.dentist_id)
+    ).all()
+    visits_by = {did: count for did, count in visit_rows}
+
+    by: dict = {}
+    for did, name, revenue in rev_rows:
+        key = str(did) if did else None
+        by[key] = {
+            "dentist_id": str(did) if did else None,
+            "dentist_name": name or "Unassigned",
+            "revenue": _cents(revenue),
+            "visits": visits_by.get(did, 0),
+        }
+    # Include dentists who have visits but no payments yet.
+    for did, count in visit_rows:
+        key = str(did) if did else None
+        if key not in by:
+            who = db.get(StaffUser, did) if did else None
+            by[key] = {
+                "dentist_id": str(did) if did else None,
+                "dentist_name": who.name if who else "Unassigned",
+                "revenue": _cents(0),
+                "visits": count,
+            }
+
+    rows = list(by.values())
+    rows.sort(key=lambda r: r["revenue"], reverse=True)
+    return rows

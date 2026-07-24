@@ -20,10 +20,18 @@ export type NoShowSummary = {
   rate: number;
 };
 
+export type DentistRevenueRow = {
+  dentist_id: string | null;
+  dentist_name: string;
+  revenue: string;
+  visits: number;
+};
+
 export type Reports = {
   revenue_trend: RevenuePoint[];
   procedure_mix: ProcedureMixRow[];
   no_show: NoShowSummary;
+  by_dentist: DentistRevenueRow[];
 };
 
 type State =
@@ -33,7 +41,9 @@ type State =
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-export function useReports(): State {
+// `dentistId` narrows the trend/mix/no-show reports to one dentist; the by_dentist
+// breakdown is always the full comparison.
+export function useReports(dentistId?: string): State {
   const [state, setState] = useState<State>(
     apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
   );
@@ -43,6 +53,7 @@ export function useReports(): State {
     let cancelled = false;
 
     (async () => {
+      if (!cancelled) setState({ kind: "loading" });
       try {
         const supabase = createClient();
         const {
@@ -50,7 +61,10 @@ export function useReports(): State {
         } = await supabase.auth.getSession();
         if (!session) throw new Error("Not signed in.");
 
-        const res = await fetch(`${apiUrl}/reports`, {
+        const url = new URL(`${apiUrl}/reports`);
+        if (dentistId) url.searchParams.set("dentist_id", dentistId);
+
+        const res = await fetch(url, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         if (res.status === 403) throw new Error("Reports are for the dentist/admin only.");
@@ -69,7 +83,7 @@ export function useReports(): State {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [dentistId]);
 
   return state;
 }

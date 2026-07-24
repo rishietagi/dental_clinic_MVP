@@ -35,9 +35,19 @@ class NoShowSummary(BaseModel):
     rate: float
 
 
+class DentistRevenueRow(BaseModel):
+    """One dentist's revenue + visit count over the window (6.5)."""
+
+    dentist_id: str | None
+    dentist_name: str
+    revenue: Decimal
+    visits: int
+
+
 class ReportsResponse(BaseModel):
     """Everything the Reports screen needs, in one payload."""
 
     revenue_trend: list[RevenuePoint]
     procedure_mix: list[ProcedureMixRow]
     no_show: NoShowSummary
+    by_dentist: list[DentistRevenueRow]

@@ -342,7 +342,9 @@ PK → roles).
 **treatment reads** (`GET /treatments?patient_id=&status=`, `GET /treatments/{id}`), and the
 **invoice API** (`POST /visits/{visit_id}/invoice` to generate, `GET /visits/{visit_id}/invoice` to
 resolve a visit's invoice or 404, `POST /invoices/{invoice_id}/payments` to capture a payment,
-`GET /invoices/collections` for today's takings, `GET /invoices/{invoice_id}`). Every invoice read
+`GET /invoices` for the ledger (all invoices, patient name + balance per row, `?status=` filter + paging,
+declared before `/{id}`; feeds `/invoices`), `GET /invoices/collections` for today's takings,
+`GET /invoices/{invoice_id}`). Every invoice read
 carries its lines, its payments, and the derived `status` / `amount_paid` / `outstanding`.
 `GET /invoices/collections` (5.5) sums the day's payments in the **clinic timezone** (via
 `billing.todays_collections` → `clinic_day_bounds`) and returns `{date, total, count, by_mode}`; it is
@@ -491,8 +493,12 @@ check-in + **Start visit**) · **Chairside/visit** (`/patients/[id]/visits/new?a
 dentist records complaint/procedures/notes + consulting dentist, then **Save & draft invoice** →) ·
 **Invoice** (`/invoices/[id]`) + **receipt** · **Reports** · **Settings**. The **consulting dentist**
 (the handoff — dentist A checks, dentist B treats) is a nullable FK on **both** `appointment` and
-`visit`; **`GET /staff?role=dentist`** (router `app/routers/staff.py`) feeds the dropdowns. Demo data:
-`app/seed_demo.py`.
+`visit`; **`GET /staff?role=dentist`** (router `app/routers/staff.py`) feeds the dropdowns. **6.5** added staff
+**management** on `/settings/clinic`: `POST /staff` (admin, create a name-only dentist record — NOT a
+login; the clinic uses a shared receptionist login), `POST /staff/{id}/deactivate|activate` (soft),
+`?include_inactive=`; and **by-dentist reports** — `GET /reports?dentist_id=` narrows revenue/mix/no-show
+to one dentist (attribution = the visit's primary dentist) and the response carries a `by_dentist`
+breakdown. Demo data: `app/seed_demo.py`.
 
 ### Design system + app shell (6.2, sidebar in 6.3)
 

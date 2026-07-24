@@ -8,6 +8,7 @@
 // /login opts out (its own centered card, no session yet), detected by pathname.
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -16,6 +17,7 @@ import {
   LayoutDashboard,
   Menu,
   Moon,
+  Receipt,
   Settings,
   Shield,
   Sun,
@@ -40,6 +42,7 @@ const NAV: NavItem[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Patients", href: "/patients", icon: Users },
   { label: "Calendar", href: "/calendar", icon: CalendarDays },
+  { label: "Invoices", href: "/invoices", icon: Receipt },
   { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
   { label: "Treatments", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },
   { label: "Settings", href: "/settings/clinic", icon: Settings, anyOf: ["admin"] },
@@ -71,9 +74,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onClose={() => setMobileOpen(false)}
       />
 
-      {/* Content: offset by the sidebar width on desktop, by the top bar on mobile */}
+      {/* Content: offset by the sidebar width on desktop, by the top bar on mobile.
+          Keyed by pathname so the fade-in replays on navigation. */}
       <div className="flex min-h-full flex-1 flex-col md:pl-60">
-        <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-10 pt-16 md:px-8 md:pt-8">
+        <main key={pathname} className="page-enter mx-auto w-full max-w-6xl flex-1 px-5 pb-10 pt-16 md:px-8 md:pt-8">
           {children}
         </main>
       </div>
@@ -84,11 +88,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 function Brand() {
   const { settings } = useClinicSettings();
   return (
-    <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-      <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground text-xs font-bold">
-        {(settings.clinic_name || "DC").slice(0, 2).toUpperCase()}
+    <Link href="/" className="flex items-center gap-2.5 font-semibold tracking-tight">
+      <Image
+        src="/clinic-logo.png"
+        alt=""
+        width={40}
+        height={30}
+        priority
+        className="h-9 w-auto object-contain"
+      />
+      <span className="truncate text-[15px] leading-tight">
+        {settings.clinic_name || "Dental Clinic"}
       </span>
-      <span className="truncate">{settings.clinic_name || "Dental Clinic"}</span>
     </Link>
   );
 }

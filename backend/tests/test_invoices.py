@@ -586,3 +586,44 @@ def _delta(after: dict, before: dict, key: str) -> Decimal:
 
 def _mode_delta(after: dict, before: dict, mode: str) -> Decimal:
     return Decimal(after["by_mode"][mode]) - Decimal(before["by_mode"][mode])
+
+
+# --- invoices list (6.4) -----------------------------------------------------
+
+def test_list_invoices(as_receptionist):
+    """A generated invoice shows up in GET /invoices with the patient name + balance."""
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
+    _pay(ctx, inv["id"], "1000.00", mode="cash")
+
+    resp = ctx.client.get("/invoices")
+    assert resp.status_code == 200, resp.text
+    row = next((i for i in resp.json()["items"] if i["id"] == inv["id"]), None)
+    assert row is not None
+    assert row["patient_name"] == "Invoice Test Patient"
+    assert row["total"] == "4000.00"
+    assert row["amount_paid"] == "1000.00"
+    assert row["outstanding"] == "3000.00"
+    assert row["status"] == "partially_paid"
+    assert "created_at" in row
+
+
+def test_list_invoices_status_filter(as_receptionist):
+    ctx = as_receptionist
+    inv = _generate(ctx, procedures=[ctx.item_a.id])
+    _pay(ctx, inv["id"], "4000.00", mode="upi")  # fully paid
+
+    paid = ctx.client.get("/invoices", params={"status": "paid"}).json()["items"]
+    assert any(i["id"] == inv["id"] for i in paid)
+    unpaid = ctx.client.get("/invoices", params={"status": "unpaid"}).json()["items"]
+    assert all(i["id"] != inv["id"] for i in unpaid)
+
+
+def test_list_invoices_requires_auth():
+    assert client.get("/invoices").status_code in (401, 403)
+
+
+def test_list_not_shadowed_by_id_route(as_receptionist):
+    """GET /invoices resolves to the list, not the {invoice_id} route."""
+    ctx = as_receptionist
+    assert ctx.client.get("/invoices").status_code == 200

@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 import { ErrorState, LoadingState } from "@/components/states";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -75,6 +76,7 @@ function Loaded({ invoice, refetch }: { invoice: Invoice; refetch: () => void })
       setError(result.message);
       return;
     }
+    toast.success(`Payment of ${formatMoney(amount)} recorded`);
     setAmount("");
     refetch();
   }

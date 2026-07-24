@@ -128,6 +128,25 @@ class InvoiceRead(BaseModel):
     payments: list[PaymentRead]
 
 
+class InvoiceListItem(BaseModel):
+    """A row in the Invoices list — the invoice plus the patient's name and the
+    derived balance figures, so the list shows who owes what at a glance."""
+
+    id: UUID
+    patient_id: UUID
+    patient_name: str
+    total: Decimal
+    amount_paid: Decimal
+    outstanding: Decimal
+    status: str
+    created_at: datetime
+
+
+class InvoiceListResponse(BaseModel):
+    items: list[InvoiceListItem]
+    total: int
+
+
 class CollectionsRead(BaseModel):
     """Today's collections for the dashboard (5.5).
 

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { AppShell } from "@/components/app-shell";
+import { Toaster } from "@/components/ui/sonner";
 
 // Set the theme BEFORE first paint so a dark user never flashes light. Reads the
 // saved choice, else the OS preference; stamps data-theme (wins over the media
@@ -51,6 +52,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         <AppShell>{children}</AppShell>
+        <Toaster />
       </body>
     </html>
   );

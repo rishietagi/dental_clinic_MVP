@@ -1,38 +1,51 @@
 "use client";
 
-// Dashboard v1 (step 3.6): today's schedule + an arrivals summary.
+// Dashboard: today's schedule + an arrivals summary (3.6, restyled 6.4).
 //
-// Always "today" — no date navigation (the calendar is for browsing other days).
-// Reuses the day-list hook and the status labels/colours rather than duplicating
-// them. Status changes are NOT here: those live in the calendar's day view, so
-// there's one place that owns them.
+// Always "today" — the calendar browses other days. Clicking an appointment ROW
+// routes to the chairside/visit screen (record consult → draft invoice); the
+// patient-name link still opens the profile. Status changes live in the calendar's
+// day view (one place owns them).
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ArrowRight } from "lucide-react";
 
-import { statusLabel, statusStyle, STATUSES } from "@/lib/appointment-status";
+import { EmptyState, ErrorState, SkeletonRows } from "@/components/states";
+import { StatusPill, type Tone } from "@/components/ui/status-pill";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { statusLabel, STATUSES } from "@/lib/appointment-status";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useDayAppointments, type AppointmentListItem } from "@/lib/use-day-appointments";
 import { fmtTimeInZone, todayIso } from "@/lib/week";
 
-// HH:MM–HH:MM in the CLINIC zone, from an ISO start + a minute duration.
 function timeRange(startIso: string, durationMin: number, tz: string): string {
   const endIso = new Date(new Date(startIso).getTime() + durationMin * 60_000).toISOString();
   return `${fmtTimeInZone(startIso, tz)}–${fmtTimeInZone(endIso, tz)}`;
 }
 
-function SummaryTile({
-  label,
-  count,
-  className = "",
-}: {
-  label: string;
-  count: number;
-  className?: string;
-}) {
+// Appointment status → a semantic pill tone.
+function apptTone(status: string): Tone {
+  if (status === "done") return "good";
+  if (status === "arrived") return "accent";
+  if (status === "no_show" || status === "cancelled") return "danger";
+  return "neutral"; // booked
+}
+
+function SummaryTile({ label, count, highlight }: { label: string; count: number; highlight?: boolean }) {
   return (
-    <div className={`rounded-lg border px-3 py-2 ${className}`}>
-      <div className="text-xl font-semibold tabular-nums">{count}</div>
-      <div className="text-xs">{label}</div>
+    <div className="rounded-xl border bg-card px-3.5 py-2.5">
+      <div className={`text-2xl font-semibold tabular-nums ${highlight ? "text-primary" : ""}`}>
+        {count}
+      </div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -42,9 +55,9 @@ export function TodayDashboard() {
   const tz = settings.timezone;
   const today = todayIso(tz);
   const state = useDayAppointments(today);
+  const router = useRouter();
 
   const items: AppointmentListItem[] = state.kind === "ready" ? state.data.items : [];
-  // Counts per status, derived from the same list the table renders.
   const counts = Object.fromEntries(
     STATUSES.map((s) => [s, items.filter((a) => a.status === s).length]),
   ) as Record<(typeof STATUSES)[number], number>;
@@ -53,77 +66,77 @@ export function TodayDashboard() {
     <section className="flex w-full flex-col gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-lg font-semibold tracking-tight">Today’s schedule</h2>
-        <Link href="/calendar" className="text-sm text-muted-foreground hover:underline">
-          View calendar →
+        <Link
+          href="/calendar"
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          View calendar <ArrowRight className="size-3.5" />
         </Link>
       </div>
 
-      {state.kind === "loading" && (
-        <p className="text-sm text-muted-foreground">Loading today’s appointments…</p>
-      )}
-
+      {state.kind === "loading" && <SkeletonRows rows={5} />}
       {state.kind === "error" && (
-        <p className="text-sm text-destructive">
-          Couldn’t load today’s appointments: {state.message}
-        </p>
+        <ErrorState message={`Couldn’t load today’s appointments: ${state.message}`} />
       )}
 
       {state.kind === "ready" && (
         <>
-          {/* Arrivals summary — at a glance, who's in and what's left. */}
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-            <SummaryTile label="Total" count={state.data.total} />
+          <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-6">
+            <SummaryTile label="Total" count={state.data.total} highlight />
             {STATUSES.map((s) => (
-              <SummaryTile
-                key={s}
-                label={statusLabel(s)}
-                count={counts[s]}
-                className={statusStyle(s)}
-              />
+              <SummaryTile key={s} label={statusLabel(s)} count={counts[s]} />
             ))}
           </div>
 
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No appointments today.</p>
+            <EmptyState title="No appointments today" hint="A quiet day — or time to schedule one." />
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm">
-                <thead className="border-b bg-muted/50 text-left text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Time</th>
-                    <th className="px-3 py-2 font-medium">Patient</th>
-                    <th className="px-3 py-2 font-medium">Dentist</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium">Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Patient</TableHead>
+                    <TableHead>Dentist</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Reason</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {items.map((a) => (
-                    <tr key={a.id} className="border-b last:border-0">
-                      <td className="whitespace-nowrap px-3 py-2 tabular-nums">
+                    <TableRow
+                      key={a.id}
+                      className="cursor-pointer"
+                      onClick={() => router.push(`/patients/${a.patient_id}/visits/new?appointment=${a.id}`)}
+                    >
+                      <TableCell className="whitespace-nowrap tabular-nums">
                         {timeRange(a.start_time, a.duration_min, tz)}
-                      </td>
-                      <td className="px-3 py-2">
+                      </TableCell>
+                      <TableCell>
                         <Link
                           href={`/patients/${a.patient_id}`}
-                          className="font-medium hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-medium text-primary hover:underline"
                         >
                           {a.patient_name}
                         </Link>
-                      </td>
-                      <td className="px-3 py-2">{a.dentist_name ?? "—"}</td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-xs ${statusStyle(a.status)}`}
-                        >
-                          {statusLabel(a.status)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">{a.reason ?? "—"}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>
+                        {a.dentist_name ?? "—"}
+                        {a.consulting_dentist_name && (
+                          <span className="block text-xs text-muted-foreground">
+                            + {a.consulting_dentist_name}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <StatusPill tone={apptTone(a.status)}>{statusLabel(a.status)}</StatusPill>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{a.reason ?? "—"}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </>

@@ -1,4 +1,5 @@
 import { ClinicSettingsForm } from "./clinic-settings-form";
+import { StaffSection } from "./staff-section";
 import { PageHeader } from "@/components/page-header";
 
 // Settings > Clinic. Any signed-in staff can view; only an admin can change —
@@ -8,9 +9,10 @@ export default function ClinicSettingsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Clinic settings"
-        subtitle="Clinic identity, opening hours, appointment slot length, and timezone. The calendar and appointment days are computed from these."
+        subtitle="Clinic identity, hours, timezone, and staff. The calendar and appointment days are computed from these."
       />
       <ClinicSettingsForm />
+      <StaffSection />
     </div>
   );
 }

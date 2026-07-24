@@ -19,36 +19,118 @@ import {
   YAxis,
 } from "recharts";
 
+import { useState } from "react";
+
 import { ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatusPill } from "@/components/ui/status-pill";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { noShowColor, useChartTheme } from "@/lib/chart-theme";
+import { useStaff } from "@/lib/use-staff";
 import { formatMoney } from "@/lib/use-invoices";
 import {
   formatMonth,
   useReports,
+  type DentistRevenueRow,
   type NoShowSummary,
   type ProcedureMixRow,
   type RevenuePoint,
 } from "@/lib/use-reports";
 
+const controlClass =
+  "flex rounded-md border border-input bg-transparent px-3 py-2 text-sm " +
+  "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] " +
+  "focus-visible:ring-ring/50";
+
 export function ReportsView() {
-  const state = useReports();
-
-  if (state.kind === "loading") {
-    return <LoadingState label="Loading reports…" />;
-  }
-  if (state.kind === "error") {
-    return <ErrorState message={`Couldn’t load reports: ${state.message}`} />;
-  }
-
-  const { revenue_trend, procedure_mix, no_show } = state.data;
+  const [dentistId, setDentistId] = useState("");
+  const state = useReports(dentistId || undefined);
+  const dentists = useStaff("dentist");
+  const dentistOptions = dentists.kind === "ready" ? dentists.items : [];
 
   return (
     <div className="flex flex-col gap-6">
-      <RevenueTrend data={revenue_trend} />
-      <ProcedureMix data={procedure_mix} />
-      <NoShow data={no_show} />
+      {/* Dentist filter — narrows the trend/mix/no-show below to one dentist. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-muted-foreground">Showing:</span>
+        <select
+          value={dentistId}
+          onChange={(e) => setDentistId(e.target.value)}
+          className={`${controlClass} w-56`}
+        >
+          <option value="">All dentists</option>
+          {dentistOptions.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {state.kind === "loading" && <LoadingState label="Loading reports…" />}
+      {state.kind === "error" && (
+        <ErrorState message={`Couldn’t load reports: ${state.message}`} />
+      )}
+      {state.kind === "ready" && (
+        <>
+          <RevenueTrend data={state.data.revenue_trend} />
+          <ProcedureMix data={state.data.procedure_mix} />
+          <NoShow data={state.data.no_show} />
+          {/* Always the full comparison, regardless of the filter above. */}
+          <ByDentist rows={state.data.by_dentist} />
+        </>
+      )}
     </div>
+  );
+}
+
+function ByDentist({ rows }: { rows: DentistRevenueRow[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>By dentist — last 6 months</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No attributed activity yet.</p>
+        ) : (
+          <div className="rounded-xl border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Dentist</TableHead>
+                  <TableHead className="text-right">Revenue</TableHead>
+                  <TableHead className="text-right">Visits</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.dentist_id ?? "unassigned"}>
+                    <TableCell className="font-medium">
+                      {r.dentist_name}
+                      {r.dentist_id === null && (
+                        <StatusPill tone="neutral" dot={false} className="ml-2">
+                          unassigned
+                        </StatusPill>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{formatMoney(r.revenue)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.visits}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

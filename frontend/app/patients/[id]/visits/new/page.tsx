@@ -15,7 +15,7 @@ export default async function NewVisitPage({
   const { id } = await params;
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    <div className="w-full">
       <Suspense fallback={null}>
         <VisitForm patientId={id} />
       </Suspense>

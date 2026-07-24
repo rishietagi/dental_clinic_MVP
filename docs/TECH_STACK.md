@@ -39,6 +39,15 @@ and is painful to trace. Local and container majors stay matched.
 | shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`, `input`, `label`. |
 | recharts | 3.10.0 | Charts on the Reports screen (6.1) — React+SVG, React-19-compatible. Styled to the **dataviz** validated palette (`lib/chart-theme.ts`), theme-aware. First frontend charting dep. |
 
+### Component library + toasts (6.4)
+
+The UI adopted a larger **shadcn/ui** component set — `table`, `dialog`, `dropdown-menu`, `tabs`,
+`tooltip`, `badge`, `separator`, `sonner` — copied into `components/ui/` (source, not a versioned dep).
+The one real new npm dependency is **`sonner`** (toast notifications; `next-themes` came along as a
+transitive but is **unused** — our Toaster reads the app's own `data-theme` stamp, so we did NOT adopt
+next-themes). shadcn's interactive components pull Radix primitives (bundled). No backend dep. The clinic
+**logo** lives at `frontend/public/clinic-logo.png` (shown in the sidebar).
+
 ### Design system (6.2)
 
 The UI has a real token system as of 6.2 — **no new dependency**, built on the existing Tailwind 4 +

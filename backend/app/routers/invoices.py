@@ -27,8 +27,9 @@ trailing `/invoice` segment disambiguates.
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Query
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -36,11 +37,14 @@ from app.auth import get_current_staff
 from app.db import get_db
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
+from app.models.patient import Patient
 from app.models.payment import Payment
 from app.models.staff_user import StaffUser
 from app.schemas.invoice import (
     CollectionsRead,
     InvoiceGenerate,
+    InvoiceListItem,
+    InvoiceListResponse,
     InvoiceRead,
     PaymentCreate,
 )
@@ -238,6 +242,55 @@ def get_todays_collections(
     "collections" as a UUID path param and 422 — the literal-before-{id} trap.
     """
     return CollectionsRead(**todays_collections(db))
+
+
+@router.get("/invoices", response_model=InvoiceListResponse)
+def list_invoices(
+    status_filter: str | None = Query(
+        default=None, alias="status", description="Optional status filter (unpaid/partially_paid/paid)."
+    ),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> InvoiceListResponse:
+    """All invoices, newest first, with the patient name + balance per row.
+
+    The Invoices nav page (a ledger of every bill). Declared BEFORE
+    `GET /invoices/{invoice_id}`, or FastAPI would parse the literal path
+    "invoices" oddly / a bare id — this list has no id segment, so it's the same
+    literal-before-`{id}` discipline the collections route follows.
+    """
+    base = select(Invoice)
+    if status_filter is not None:
+        base = base.where(Invoice.status == status_filter)
+
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+
+    rows = db.execute(
+        base.add_columns(Patient.name)
+        .join(Patient, Invoice.patient_id == Patient.id)
+        .order_by(Invoice.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    items = []
+    for invoice, patient_name in rows:
+        amount_paid, outstanding = invoice_balances(db, invoice)
+        items.append(
+            InvoiceListItem(
+                id=invoice.id,
+                patient_id=invoice.patient_id,
+                patient_name=patient_name,
+                total=invoice.total,
+                amount_paid=amount_paid,
+                outstanding=outstanding,
+                status=invoice.status,
+                created_at=invoice.created_at,
+            )
+        )
+    return InvoiceListResponse(items=items, total=total)
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceRead)

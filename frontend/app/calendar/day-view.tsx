@@ -10,11 +10,11 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { StatusPill, type Tone } from "@/components/ui/status-pill";
 import {
   changeStatus,
   nextStatuses,
   statusLabel,
-  statusStyle,
   type Status,
 } from "@/lib/appointment-status";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
@@ -37,12 +37,15 @@ function timeRange(startIso: string, durationMin: number, tz: string): string {
   return `${fmtTimeInZone(startIso, tz)}–${fmtTimeInZone(endIso, tz)}`;
 }
 
+function apptTone(status: string): Tone {
+  if (status === "done") return "good";
+  if (status === "arrived") return "accent";
+  if (status === "no_show" || status === "cancelled") return "danger";
+  return "neutral";
+}
+
 function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-xs ${statusStyle(status)}`}>
-      {statusLabel(status)}
-    </span>
-  );
+  return <StatusPill tone={apptTone(status)}>{statusLabel(status)}</StatusPill>;
 }
 
 // The legal next-status buttons for one appointment. Terminal statuses render

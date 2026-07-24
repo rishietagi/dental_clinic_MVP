@@ -11,7 +11,7 @@ export default async function PatientProfilePage({
   const { id } = await params;
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    <div className="w-full">
       <PatientProfile patientId={id} />
     </div>
   );
