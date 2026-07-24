@@ -1,12 +1,11 @@
 "use client";
 
-// The app shell (step 6.2): a persistent top header — clinic name, role-aware
-// horizontal nav with an active-route highlight, a theme toggle, and sign-out —
-// over a centered content column. Before this, nav only existed on the dashboard
-// and every page rolled its own <main>; now every signed-in page shares one frame.
+// The app shell (6.2, reworked to a LEFT SIDEBAR in 6.3): a persistent vertical
+// nav rail — clinic name at the top, role-aware nav, theme toggle + sign-out pinned
+// at the bottom — with the page content filling the rest of the width. On small
+// screens the sidebar collapses behind a menu button.
 //
-// /login opts out (it has its own centered card and no session yet), detected by
-// pathname — the shell renders children bare there.
+// /login opts out (its own centered card, no session yet), detected by pathname.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -15,11 +14,13 @@ import {
   BarChart3,
   CalendarDays,
   LayoutDashboard,
+  Menu,
   Moon,
   Settings,
   Shield,
   Sun,
   Users,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ const NAV: NavItem[] = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   // /login (and any future bare route) renders without the shell.
   if (pathname === "/login") {
@@ -53,15 +55,53 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <Header pathname={pathname} />
-      <main className="mx-auto w-full max-w-4xl flex-1 px-5 py-8">{children}</main>
+    <div className="flex min-h-full">
+      {/* Mobile top bar */}
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b bg-sidebar px-4 py-2.5 md:hidden">
+        <Button variant="ghost" size="sm" className="px-2" onClick={() => setMobileOpen(true)} aria-label="Open menu">
+          <Menu className="size-5" />
+        </Button>
+        <Brand />
+      </div>
+
+      {/* Sidebar — fixed on desktop, a slide-over on mobile */}
+      <Sidebar
+        pathname={pathname}
+        mobileOpen={mobileOpen}
+        onClose={() => setMobileOpen(false)}
+      />
+
+      {/* Content: offset by the sidebar width on desktop, by the top bar on mobile */}
+      <div className="flex min-h-full flex-1 flex-col md:pl-60">
+        <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-10 pt-16 md:px-8 md:pt-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
 
-function Header({ pathname }: { pathname: string }) {
+function Brand() {
   const { settings } = useClinicSettings();
+  return (
+    <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+      <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground text-xs font-bold">
+        {(settings.clinic_name || "DC").slice(0, 2).toUpperCase()}
+      </span>
+      <span className="truncate">{settings.clinic_name || "Dental Clinic"}</span>
+    </Link>
+  );
+}
+
+function Sidebar({
+  pathname,
+  mobileOpen,
+  onClose,
+}: {
+  pathname: string;
+  mobileOpen: boolean;
+  onClose: () => void;
+}) {
   const staffState = useCurrentStaff();
   const roles = staffState.kind === "staff" ? staffState.staff.roles : [];
   const canSee = (item: NavItem) => !item.anyOf || item.anyOf.some((r) => roles.includes(r));
@@ -70,44 +110,62 @@ function Header({ pathname }: { pathname: string }) {
     href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <header className="sticky top-0 z-20 border-b bg-sidebar/85 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-4 px-5 py-3">
-        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-          <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
-            {(settings.clinic_name || "DC").slice(0, 2).toUpperCase()}
-          </span>
-          <span className="hidden sm:inline">{settings.clinic_name || "Dental Clinic"}</span>
-        </Link>
+    <>
+      {/* Mobile scrim */}
+      {mobileOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={onClose}
+        />
+      )}
 
-        <nav className="flex flex-1 items-center gap-0.5 overflow-x-auto">
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r bg-sidebar transition-transform md:translate-x-0",
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <div className="flex items-center justify-between px-4 py-4">
+          <Brand />
+          <Button variant="ghost" size="sm" className="px-2 md:hidden" onClick={onClose} aria-label="Close menu">
+            <X className="size-5" />
+          </Button>
+        </div>
+
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-2">
           {NAV.filter(canSee).map(({ label, href, icon: Icon }) => (
             <Link
               key={href}
               href={href}
+              onClick={onClose}
               className={cn(
-                "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
                 isActive(href)
                   ? "bg-accent text-accent-foreground font-medium"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
-              <Icon className="size-4" />
-              <span className="hidden md:inline">{label}</span>
+              <Icon className="size-4 shrink-0" />
+              <span>{label}</span>
             </Link>
           ))}
         </nav>
 
-        <ThemeToggle />
-        <SignOut />
-      </div>
-    </header>
+        <div className="flex items-center justify-between gap-2 border-t px-3 py-3">
+          <SignOut />
+          <ThemeToggle />
+        </div>
+      </aside>
+    </>
   );
 }
 
 // Theme toggle: the source of truth is the `data-theme` stamp the pre-paint script
-// (in layout.tsx) already put on <html>, so this reads from the DOM rather than
-// syncing external state into React via an effect (which the set-state-in-effect
-// rule forbids). A tick counter just forces a re-render after we flip the DOM.
+// (in layout.tsx) already put on <html>, so we read the DOM rather than syncing
+// external state into React via an effect (set-state-in-effect rule). A tick
+// counter forces a re-render after we flip the DOM.
 function ThemeToggle() {
   const [, force] = useState(0);
   const dark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
@@ -116,7 +174,7 @@ function ThemeToggle() {
     const next = !dark;
     const root = document.documentElement;
     root.dataset.theme = next ? "dark" : "light";
-    root.classList.toggle("dark", next); // keep Tailwind `dark:` variants in sync
+    root.classList.toggle("dark", next);
     localStorage.setItem("theme", next ? "dark" : "light");
     force((n) => n + 1);
   }
@@ -137,7 +195,7 @@ function SignOut() {
     router.push("/login");
   }
   return (
-    <Button variant="outline" size="sm" onClick={handle} className="hidden sm:inline-flex">
+    <Button variant="outline" size="sm" onClick={handle} className="flex-1">
       Sign out
     </Button>
   );
