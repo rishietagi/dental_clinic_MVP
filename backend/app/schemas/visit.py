@@ -62,7 +62,10 @@ class VisitCreate(BaseModel):
 
     # Optional links. appointment_id is None for a walk-in.
     appointment_id: UUID | None = None
+    # The PRIMARY dentist (defaults to whoever records it if omitted, in the router).
     dentist_id: UUID | None = None
+    # The CONSULTING (second) dentist for a handoff — always optional (6.3).
+    consulting_dentist_id: UUID | None = None
 
     # Defaults to now() server-side when omitted.
     visit_date: datetime | None = None
@@ -153,6 +156,9 @@ class VisitRead(BaseModel):
     treatment_id: UUID
     appointment_id: UUID | None
     dentist_id: UUID | None
+    dentist_name: str | None
+    consulting_dentist_id: UUID | None
+    consulting_dentist_name: str | None
     visit_date: datetime
     complaint: str | None
     clinical_notes: str | None

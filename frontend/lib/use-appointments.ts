@@ -20,6 +20,7 @@ export type AppointmentCreateBody = {
   patient_id: string;
   treatment_id?: string | null;
   dentist_id?: string | null;
+  consulting_dentist_id?: string | null;
   start_time: string; // ISO 8601
   duration_min?: number;
   reason?: string | null;

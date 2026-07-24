@@ -15,8 +15,9 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports) + 6.2
-(UI redesign) done. Next is 6.3 (demo to the user + fix feedback).**
+**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports), 6.2
+(UI redesign), and 6.3 (usability overhaul — views/entry-points/chairside/dentist-handoff/demo-data)
+done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -30,13 +31,27 @@ full plan and roadmap), then this file (what actually happened).
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs:**
-- **Migration head = `deae87a07c3c`** (the **twelfth** migration, `add patient_file`, 5.6).
+- **Migration head = `19b4e1314059`** (the **thirteenth** migration, `add consulting dentist`, 6.3 —
+  adds `consulting_dentist_id` FK to `appointment` + `visit`).
 - **Thirteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
   `payment`, `patient_file`.
 - **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`.
-- **214 backend tests pass.** Two seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients).
+- **228 backend tests pass.** Three seed scripts: `app.seed` (admin), `app.seed_patients` (dev
+  patients), **`app.seed_demo`** (full demo dataset — dentists/appts/visits/invoices/payments/files, 6.3).
+- **Routers include `/staff`** (dentist directory, `GET /staff?role=dentist`, 6.3) for the booking/visit
+  dentist dropdowns.
+- **The app is now usable as a clinic tool** (6.3): a **left-sidebar** app shell + full-width layout;
+  a **New patient** screen (`/patients/new`) + **Schedule appointment** screen (`/appointments/new`),
+  reached from **quick-action buttons** on the dashboard/patients/calendar (before this the app had no
+  add-patient or standalone booking UI); a **chairside flow** — day-view appointments have a **Start
+  visit** link (`/patients/[id]/visits/new?appointment=<id>`, prefills the appointment) and the visit
+  form has a **Save & draft invoice** button routing to the generate screen (book → arrive → treat →
+  bill). **Consulting (second) dentist** per appointment AND per visit (the handoff: primary checks,
+  consulting treats), shown in the calendar + patient history. New **`GET /staff?role=`** endpoint feeds
+  the dentist dropdowns. **`app/seed_demo.py`** populates every screen (dentists, appts across statuses,
+  visits, invoices+payments, files) — run `docker compose run --rm backend python -m app.seed_demo`.
 - **The app has a design system now** (6.2): warm/friendly redesign. Tokens in `app/globals.css`
   (mint/teal primary, warm-sand neutrals, coral secondary, semantic status colors), **both themes** +
   a **manual theme toggle** (`data-theme` on `<html>`, pre-paint script in `layout.tsx`, `localStorage`).
@@ -281,6 +296,7 @@ the original step instructions say otherwise:
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
+| **Consulting (second) dentist + the view structure + `/staff` (6.3)** | Single `dentist_id`; no add-patient/booking UI; no `/staff` | Dental handoff (dentist A checks, hands treatment to dentist B) → **`consulting_dentist_id` FK on BOTH `appointment` AND `visit`** (nullable/optional; the visit is the permanent record so it's captured there too), migration `19b4e1314059` (13th; **name the FKs by hand** — the unnamed-drop downgrade trap). Labels **Primary dentist / Consulting dentist**. New **`GET /staff?role=`** (any active staff; id/name/roles only) feeds the dentist dropdowns. The app got its missing **views + entry points**: `/patients/new`, `/appointments/new`, quick-action buttons on dashboard/patients/calendar, and a **chairside flow** — day-view **Start visit** (`?appointment=<id>` prefill; appointment id in the query is NOT a patient id, so the no-PII rule holds) → visit form (+ consulting dentist) → **Save & draft invoice** → the 5.2 generate screen. **`app/seed_demo.py`** seeds a full demo dataset (idempotent via an audit marker). No new deps. | `backend/app/models/appointment.py`, `backend/app/models/visit.py`, `backend/app/routers/staff.py`, `frontend/app/appointments/new/`, `frontend/app/patients/new/`, `backend/app/seed_demo.py` |
 | **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
 | **Today's collections = `GET /invoices/collections`, summed in the CLINIC zone (5.5)** | — | `billing.todays_collections` sums the day's `payment.amount` where `paid_at` is in the **clinic-local** today — it reads the tz from `clinic_settings` and bounds the day with `clinic_day_bounds` (the 4.9 helper), so a 9pm-IST payment counts for the right clinic day (the 4.9 fix, now for money). Returns `{date, total, count, by_mode}` with `by_mode` always carrying **all three modes** (cash/card/upi, 0.00 if none) for a stable card. Money is `.quantize(Decimal("0.01"))` (the 5.3 "0" vs "0.00" gotcha). **Route order:** `GET /invoices/collections` is declared **BEFORE** `GET /invoices/{invoice_id}` or "collections" parses as a UUID → 422 (the literal-before-`{id}` trap, same as 4.8's needs-follow-up; a test pins it). Any active staff. Dashboard card `app/todays-collections.tsx` on `/`. No migration/model/dep. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `frontend/app/todays-collections.tsx` |
 | **Billing UI + receipt (5.4): clinic identity on `clinic_settings`, print via `window.print()`** | Roadmap says only "printable receipt" | A receipt needs an invoice to exist, and there was **no billing UI** (5.2/5.3 were API-only) — so 5.4 built the whole flow: `/invoices/new/[visitId]` (generate: seeded procedure lines + discount + custom lines), `/invoices/[id]` (view + take payment), `/invoices/[id]/receipt` (print). Reached from **each visit row on the patient profile** via **`GET /visits/{visit_id}/invoice`** (new read, 404 = "no invoice yet" → "Generate" vs "View"; reuses the UNIQUE, no visit column added). **Clinic identity lives on `clinic_settings`** (`clinic_name` NOT NULL default 'Dental Clinic', nullable `address`/`phone`; migration `e8dbf0db4dec`, the 11th — autogenerated, the NOT NULL default backfills the singleton) — edited on `/settings/clinic`, printed on the receipt header. **Print = `window.print()` + a `.no-print` class + `@media print` in `globals.css`** — NO PDF lib, no new dep. `frontend/lib/use-invoices.ts` mirrors `use-visits.ts`; `formatMoney` = `Intl.NumberFormat("en-IN", INR)` on the decimal **string** (never float). Billing UI is **any-staff** (no role gate — the API is the guard). Added `useVisit` to `use-visits.ts`. | `frontend/lib/use-invoices.ts`, `frontend/app/invoices/`, `backend/app/models/clinic_settings.py`, `backend/app/routers/invoices.py` |
@@ -301,6 +317,83 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-24 — Step 6.3: usability overhaul — views, entry points, chairside flow, dentist handoff, demo data
+
+**Status:** complete — the demo surfaced that the backend had the features but the app lacked the
+**views/entry-points** to use them. This step made it a usable clinic tool. Built in 4 chunks (A layout
+reviewed + committed first; B–D run together). **One migration (13th), one new endpoint, no new deps.**
+228 backend tests pass; lint + build green; full stack up + **seeded with demo data**. For commit.
+
+### Why this step (user feedback on the 6.2 demo)
+The user asked for: left sidebar, full-width layout, a consulting/second dentist, an Add-patient button,
+a Schedule-appointment button, a chairside/visit view, a coherent view structure, and realistic seed
+data + validation tests. Backend reality: `POST /patients`/`/appointments`, visit recording, invoicing
+all existed — the gaps were **frontend screens + entry points**, plus two backend additions
+(consulting-dentist columns + a staff-list endpoint).
+
+### Chunk A — layout (reviewed + committed on its own)
+- `components/app-shell.tsx` → a **left sidebar** (clinic name, vertical role-aware nav with active
+  highlight, theme toggle + sign-out at the bottom; collapses to a menu on mobile). Content column
+  widened from `max-w-4xl` to a fluid `max-w-6xl` (the wasted right-margin in the screenshot). Fixed the
+  nav overflow.
+
+### Chunk B — dentist handoff + entry points + booking
+- **Backend:** `consulting_dentist_id` (FK→staff_user, nullable) on `appointment` + `visit` (migration
+  `19b4e1314059`, 13th — FKs named by hand for a reversible downgrade). `AppointmentCreate/Update` +
+  `VisitCreate` gained the field; the appointment list join + visit read resolve both dentists' **names**
+  (a second aliased `staff_user` join for the consulting one). Validation: a dentist id must be an active
+  staff member (→ 422). New **`app/routers/staff.py`** — `GET /staff?role=dentist` (any active staff;
+  id/name/roles). Tests: consulting dentist persists/reads with names, optional, invalid→422; staff
+  endpoint lists active + filters by role + no email leak.
+- **Frontend:** `lib/use-staff.ts` + `lib/use-patients.ts` (createPatient); **`/patients/new`** (register
+  form → routes to the profile); **`/appointments/new`** (patient picker via `usePatientSearch`,
+  date/time/duration, **primary + consulting dentist** selects, reason; 409 slot-clash inline).
+  Quick-action buttons (New patient / Schedule appointment) on the dashboard, patients list, and calendar.
+
+### Chunk C — chairside / visit flow
+- Day-view: each appointment row gets **Start visit →** (`/patients/[id]/visits/new?appointment=<id>`),
+  linking the visit to the appointment. The visit form gained a **Consulting dentist** field and a
+  **Save & draft invoice** button → the 5.2 generate screen (`/invoices/new/[visitId]`), closing the
+  treat→bill loop. Patient history now shows the primary + consulting dentist per visit. `Visit`/
+  `AppointmentListItem` frontend types + `VisitRead` gained the dentist name fields.
+
+### Chunk D — seed data + validation tests
+- `app/seed_demo.py` (**new**) — a full, idempotent (audit-marker-guarded) demo dataset: 2 dentists, the
+  treatment catalogue, ~50 patients, 16 appointments (past/today/future × all statuses, some with a
+  consulting dentist), 12 visits with procedures, 12 invoices with payments (paid/partial/unpaid), 5
+  file placeholders. Run: `docker compose run --rm backend python -m app.seed_demo`.
+- `tests/test_validation.py` (**new**, 8) — bad inputs rejected (blank patient name 422, unknown patient
+  404, bad duration 422, overlap 409, bad payment mode 422, bad file type 415) + **data-routing** checks
+  (a visit shows in patient history; an appointment shows in the day list). 214 → **228**.
+
+### Bug avoided during build (worth remembering)
+The consulting-dentist migration autogenerated with **unnamed** FKs (`create_foreign_key(None,…)` +
+`drop_constraint(None,…)`) — the exact `999215bea700` downgrade trap. Named both FKs by hand;
+downgrade + re-upgrade verified.
+
+### Verified
+- **228 backend tests pass** in-container; migration applies + reverses + re-applies; `/staff` live
+  (401 unauth). **Seed ran live** (2 dentists / 16 appts / 12 visits / 12 invoices / 5 files).
+- Frontend **lint + build green** (new routes register, TS passes); images rebuilt; **full stack up**
+  through Caddy; `/patients/new` + `/appointments/new` guarded (307 → login signed-out).
+
+### What was NOT verified by me (honest note)
+The API paths + data routing are test-proven and the screens build. The **browser click-through is the
+user's** (real auth): the sidebar, New patient → profile, Schedule appointment (with two dentists),
+calendar → Start visit → record → Save & draft invoice → payment → receipt, and the demo data filling
+every screen. **Handed over.**
+
+### Carried forward
+Chunk A was committed separately (user reviewed the layout first). B–D are one batch. Real Supabase
+logins for the seeded demo dentists are out of scope (staff rows only). `role-nav.tsx` +
+`sign-out-button.tsx` remain dead (superseded by the sidebar) — delete anytime.
+
+### Suggested commits
+Chunk A: `feat: left sidebar and full-width layout` (done). B–D: `feat: add consulting dentist, booking
++ patient screens, chairside flow, and demo data`.
 
 ---
 

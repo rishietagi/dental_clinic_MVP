@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { VisitForm } from "./visit-form";
 
 // Visit record route (step 4.4) — the screen Phase 4 exists for.
@@ -14,7 +16,9 @@ export default async function NewVisitPage({
 
   return (
     <div className="mx-auto w-full max-w-2xl">
-      <VisitForm patientId={id} />
+      <Suspense fallback={null}>
+        <VisitForm patientId={id} />
+      </Suspense>
     </div>
   );
 }

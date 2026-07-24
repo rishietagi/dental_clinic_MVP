@@ -49,9 +49,19 @@ class Appointment(Base):
         PGUUID(as_uuid=True), ForeignKey("treatment.id"), nullable=True
     )
 
-    # Nullable: a slot may be booked before a dentist is assigned.
+    # The PRIMARY dentist — who the appointment is booked under / who does the
+    # initial check. Nullable: a slot may be booked before a dentist is assigned.
     dentist_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff_user.id"), nullable=True
+    )
+
+    # The CONSULTING dentist (5.6-era handoff): a second dentist brought in for the
+    # treatment when the primary hands it off. Always optional — most appointments
+    # have one dentist; the handoff is the exception. Distinct FK to staff_user.
+    consulting_dentist_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("staff_user.id"),
+        nullable=True,
     )
 
     start_time: Mapped[datetime] = mapped_column(

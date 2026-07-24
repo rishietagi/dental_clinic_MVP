@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.auth import get_current_staff
 from app.db import get_db
@@ -69,6 +69,23 @@ def _get_or_404(db: Session, appointment_id: UUID) -> Appointment:
     return appt
 
 
+def _validate_dentist(db: Session, dentist_id: UUID | None, *, field: str) -> None:
+    """Reject a dentist id that isn't a real, active staff member (422).
+
+    Both dentist fields (primary + consulting) go through this. A NULL is fine
+    (both are optional). An unknown/inactive id is a clear 422 rather than a raw FK
+    error or a dangling reference.
+    """
+    if dentist_id is None:
+        return
+    who = db.get(StaffUser, dentist_id)
+    if who is None or not who.active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{field} is not an active staff member.",
+        )
+
+
 def _commit_or_conflict(db: Session) -> None:
     """Commit, translating the no-overlap constraint violation into a 409.
 
@@ -98,6 +115,8 @@ def create_appointment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
         )
+    _validate_dentist(db, body.dentist_id, field="Dentist")
+    _validate_dentist(db, body.consulting_dentist_id, field="Consulting dentist")
 
     conflicts = find_conflicts(
         db,
@@ -166,12 +185,16 @@ def list_appointments(
     day_start, _ = clinic_day_bounds(range_start, tz_name)
     _, day_end = clinic_day_bounds(range_end, tz_name)
 
-    # Join the patient (always present) and the dentist (nullable → outerjoin) so
-    # each row carries the names the calendar needs — one query, no N+1.
+    # Join the patient (always present), the primary dentist, and the consulting
+    # dentist (both nullable → outerjoins, the consulting one via an ALIAS since we
+    # join staff_user twice) so each row carries the names the calendar needs — one
+    # query, no N+1.
+    consulting = aliased(StaffUser)
     rows = db.execute(
-        select(Appointment, Patient.name, StaffUser.name)
+        select(Appointment, Patient.name, StaffUser.name, consulting.name)
         .join(Patient, Appointment.patient_id == Patient.id)
         .outerjoin(StaffUser, Appointment.dentist_id == StaffUser.id)
+        .outerjoin(consulting, Appointment.consulting_dentist_id == consulting.id)
         .where(Appointment.start_time >= day_start)
         .where(Appointment.start_time <= day_end)
         .order_by(Appointment.start_time)
@@ -184,13 +207,15 @@ def list_appointments(
             patient_name=patient_name,
             dentist_id=appt.dentist_id,
             dentist_name=dentist_name,
+            consulting_dentist_id=appt.consulting_dentist_id,
+            consulting_dentist_name=consulting_name,
             treatment_id=appt.treatment_id,
             start_time=appt.start_time,
             duration_min=appt.duration_min,
             status=appt.status,
             reason=appt.reason,
         )
-        for appt, patient_name, dentist_name in rows
+        for appt, patient_name, dentist_name, consulting_name in rows
     ]
 
     return AppointmentListResponse(items=items, total=len(items))
@@ -219,6 +244,11 @@ def update_appointment(
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         return appt
+
+    if "dentist_id" in changes:
+        _validate_dentist(db, changes["dentist_id"], field="Dentist")
+    if "consulting_dentist_id" in changes:
+        _validate_dentist(db, changes["consulting_dentist_id"], field="Consulting dentist")
 
     for field, value in changes.items():
         setattr(appt, field, value)

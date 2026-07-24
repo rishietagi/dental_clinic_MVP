@@ -19,11 +19,11 @@ class AppointmentCreate(BaseModel):
     patient_id: UUID = Field(description="The patient being booked.")
     start_time: datetime = Field(description="Appointment start (timezone-aware).")
     duration_min: int = Field(default=30, ge=5, description="Slot length in minutes.")
-    # Nullable: a slot may be booked before a dentist is assigned. Overlap is only
-    # enforced once a dentist is set (see the booking service / DB constraint).
+    # The PRIMARY dentist. Nullable: a slot may be booked before one is assigned.
+    # Overlap is only enforced once a dentist is set (booking service / DB constraint).
     dentist_id: UUID | None = None
-    # Plain nullable column — no FK until Phase 4. A follow-up sets this; a first
-    # booking leaves it None.
+    # The CONSULTING (second) dentist for a handoff — always optional (6.3).
+    consulting_dentist_id: UUID | None = None
     treatment_id: UUID | None = None
     reason: str | None = None
 
@@ -38,6 +38,7 @@ class AppointmentUpdate(BaseModel):
     start_time: datetime | None = None
     duration_min: int | None = Field(default=None, ge=5)
     dentist_id: UUID | None = None
+    consulting_dentist_id: UUID | None = None
     treatment_id: UUID | None = None
     reason: str | None = None
 
@@ -62,6 +63,7 @@ class AppointmentRead(BaseModel):
     patient_id: UUID
     treatment_id: UUID | None
     dentist_id: UUID | None
+    consulting_dentist_id: UUID | None
     start_time: datetime
     duration_min: int
     status: str
@@ -84,6 +86,8 @@ class AppointmentListItem(BaseModel):
     patient_name: str
     dentist_id: UUID | None
     dentist_name: str | None
+    consulting_dentist_id: UUID | None
+    consulting_dentist_name: str | None
     treatment_id: UUID | None
     start_time: datetime
     duration_min: int

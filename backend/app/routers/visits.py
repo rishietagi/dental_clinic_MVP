@@ -82,6 +82,13 @@ def _load_procedures(db: Session, visit_id: UUID) -> list[ProcedureRead]:
     ]
 
 
+def _dentist_name(db: Session, dentist_id: UUID | None) -> str | None:
+    if dentist_id is None:
+        return None
+    who = db.get(StaffUser, dentist_id)
+    return who.name if who is not None else None
+
+
 def _to_read(db: Session, visit: Visit) -> VisitRead:
     """Assemble the full visit response: the sitting + its thread + what was done."""
     treatment = db.get(Treatment, visit.treatment_id)
@@ -91,6 +98,9 @@ def _to_read(db: Session, visit: Visit) -> VisitRead:
         treatment_id=visit.treatment_id,
         appointment_id=visit.appointment_id,
         dentist_id=visit.dentist_id,
+        dentist_name=_dentist_name(db, visit.dentist_id),
+        consulting_dentist_id=visit.consulting_dentist_id,
+        consulting_dentist_name=_dentist_name(db, visit.consulting_dentist_id),
         visit_date=visit.visit_date,
         complaint=visit.complaint,
         clinical_notes=visit.clinical_notes,
@@ -163,11 +173,21 @@ def create_visit(
             detail="That treatment is already completed. Reopen it before adding a visit.",
         ) from exc
 
+    # A consulting dentist, if given, must be a real active staff member.
+    if body.consulting_dentist_id is not None:
+        who = db.get(StaffUser, body.consulting_dentist_id)
+        if who is None or not who.active:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Consulting dentist is not an active staff member.",
+            )
+
     visit = Visit(
         patient_id=body.patient_id,
         treatment_id=treatment.id,
         appointment_id=body.appointment_id,
         dentist_id=body.dentist_id if body.dentist_id is not None else staff.id,
+        consulting_dentist_id=body.consulting_dentist_id,
         complaint=body.complaint,
         clinical_notes=body.clinical_notes,
     )

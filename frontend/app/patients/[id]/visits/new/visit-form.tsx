@@ -17,8 +17,8 @@
 //
 // Plain styling on purpose: visual polish is Phase 6.
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 import { MedicalNotesBanner } from "@/components/medical-notes-banner";
@@ -29,6 +29,7 @@ import { bookAppointment } from "@/lib/use-appointments";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { usePatient } from "@/lib/use-patient";
+import { useStaff } from "@/lib/use-staff";
 import { formatPrice, useTreatmentItems } from "@/lib/use-treatment-items";
 import { usePatientTreatments, type Treatment } from "@/lib/use-treatments";
 import {
@@ -59,12 +60,24 @@ function recordVisitMessage(result: RecordVisitResult): string {
 
 export function VisitForm({ patientId }: { patientId: string }) {
   const router = useRouter();
+  const params = useSearchParams();
+  // When the visit is started from a calendar appointment ("Start visit"), the
+  // appointment id rides in as ?appointment=<id> so the visit links back to it.
+  const appointmentId = params.get("appointment");
   const patientState = usePatient(patientId);
   const staffState = useCurrentStaff();
   const treatmentsState = usePatientTreatments(patientId, { openOnly: true });
   const itemsState = useTreatmentItems(false); // active catalogue items only
+  const dentists = useStaff("dentist");
   const { settings } = useClinicSettings();
   const slotMinutes = settings.slot_minutes;
+
+  // The optional consulting (second) dentist for this sitting.
+  const [consultingId, setConsultingId] = useState("");
+  // Which submit button was pressed — a ref, not state, so the submit handler
+  // reads the intent set in the same click event (state wouldn't have flushed).
+  const draftInvoiceRef = useRef(false);
+  const dentistOptions = dentists.kind === "ready" ? dentists.items : [];
 
   // Which treatment this sitting belongs to: an existing id, or "new".
   const [choice, setChoice] = useState<string | null>(null);
@@ -209,6 +222,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
     const body = {
       patient_id: patientId,
       ...choicePart,
+      appointment_id: appointmentId || null,
+      consulting_dentist_id: consultingId || null,
       complaint: complaint.trim() || null,
       clinical_notes: notes.trim() || null,
       procedures: procedures.filter((p) => p.treatment_item_id),
@@ -236,7 +251,12 @@ export function VisitForm({ patientId }: { patientId: string }) {
       return;
     }
 
-    // Back to the profile, where the new visit shows in the history.
+    // "Draft invoice" closes the treat->bill loop: go to the generate-invoice
+    // screen for the visit just recorded. Otherwise back to the profile.
+    if (draftInvoiceRef.current) {
+      router.push(`/invoices/new/${result.visit.id}`);
+      return;
+    }
     router.push(`/patients/${patientId}`);
     router.refresh();
   }
@@ -419,6 +439,27 @@ export function VisitForm({ patientId }: { patientId: string }) {
                   className={controlClass}
                 />
               </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="consulting" className="text-xs text-muted-foreground">
+                  Consulting dentist (optional)
+                </label>
+                <select
+                  id="consulting"
+                  value={consultingId}
+                  onChange={(e) => setConsultingId(e.target.value)}
+                  className={`${controlClass} w-72`}
+                >
+                  <option value="">— none —</option>
+                  {dentistOptions.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-muted-foreground">
+                  Set this if a second dentist took over the treatment this sitting.
+                </span>
+              </div>
             </CardContent>
           </Card>
 
@@ -548,11 +589,17 @@ export function VisitForm({ patientId }: { patientId: string }) {
             </p>
           )}
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Disabled while in flight: a double-submit would record the
                 sitting twice. After the visit has saved (savedTreatmentId set),
                 the button only retries the follow-up booking. */}
-            <Button type="submit" disabled={busy || effectiveChoice === null}>
+            <Button
+              type="submit"
+              disabled={busy || effectiveChoice === null}
+              onClick={() => {
+                draftInvoiceRef.current = false;
+              }}
+            >
               {busy
                 ? savedTreatmentId
                   ? "Booking…"
@@ -561,6 +608,22 @@ export function VisitForm({ patientId }: { patientId: string }) {
                   ? "Book follow-up"
                   : "Record visit"}
             </Button>
+
+            {/* Save and go straight to billing — the chairside → bill hand-off.
+                Hidden once we're only retrying a follow-up booking. */}
+            {!savedTreatmentId && (
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={busy || effectiveChoice === null}
+                onClick={() => {
+                  draftInvoiceRef.current = true;
+                }}
+              >
+                Save &amp; draft invoice
+              </Button>
+            )}
+
             <Link
               href={`/patients/${patientId}`}
               className="text-sm text-muted-foreground hover:underline"

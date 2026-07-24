@@ -1,7 +1,11 @@
+import Link from "next/link";
+import { CalendarPlus, UserPlus } from "lucide-react";
+
 import { HealthCard } from "./health-card";
 import { NeedsFollowUp } from "./needs-follow-up";
 import { TodayDashboard } from "./today-dashboard";
 import { TodaysCollections } from "./todays-collections";
+import { buttonVariants } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
 
 // The dashboard — the app's home screen. The app shell (components/app-shell.tsx)
@@ -17,7 +21,23 @@ export default function Home() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Dashboard" subtitle={todayLabel} />
+      <PageHeader
+        title="Dashboard"
+        subtitle={todayLabel}
+        action={
+          <>
+            <Link
+              href="/patients/new"
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              <UserPlus className="size-4" /> New patient
+            </Link>
+            <Link href="/appointments/new" className={buttonVariants({ size: "sm" })}>
+              <CalendarPlus className="size-4" /> Schedule appointment
+            </Link>
+          </>
+        }
+      />
 
       {/* Money + attention first: today's takings and who needs a follow-up. */}
       <div className="grid gap-4 md:grid-cols-2">

@@ -65,9 +65,19 @@ class Visit(Base):
         PGUUID(as_uuid=True), ForeignKey("appointment.id"), nullable=True
     )
 
-    # Who recorded it. Nullable, mirroring appointment.dentist_id.
+    # The PRIMARY dentist — who recorded / led the sitting. Nullable, mirroring
+    # appointment.dentist_id.
     dentist_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff_user.id"), nullable=True
+    )
+
+    # The CONSULTING dentist who actually did (part of) the work this sitting, if a
+    # handoff happened. Always optional. The visit is the permanent clinical record,
+    # so the handoff is captured HERE too, not just on the appointment.
+    consulting_dentist_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("staff_user.id"),
+        nullable=True,
     )
 
     visit_date: Mapped[datetime] = mapped_column(

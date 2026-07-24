@@ -480,7 +480,21 @@ The frontend mirrors the transition map + labels + colours in `lib/appointment-s
 offers only legal buttons — the API is still the real guard). The **day view** shows coloured status
 pills plus per-appointment status buttons; the **week view** colours its cards by status.
 
-### Design system + app shell (6.2)
+### View structure + chairside flow (6.3)
+
+The app's page map, matching the clinic's **book → arrive → treat → bill** flow: **Dashboard** (`/`,
+overview + New-patient / Schedule-appointment quick actions) · **Patients** (`/patients` list, +New) →
+**Patient profile** (`/patients/[id]` — history with primary+consulting dentist, files, billing) ·
+**New patient** (`/patients/new`) · **New appointment** (`/appointments/new` — patient picker,
+date/time, **primary + consulting dentist**, reason) · **Calendar** (`/calendar` — each appointment has
+check-in + **Start visit**) · **Chairside/visit** (`/patients/[id]/visits/new?appointment=<id>` — the
+dentist records complaint/procedures/notes + consulting dentist, then **Save & draft invoice** →) ·
+**Invoice** (`/invoices/[id]`) + **receipt** · **Reports** · **Settings**. The **consulting dentist**
+(the handoff — dentist A checks, dentist B treats) is a nullable FK on **both** `appointment` and
+`visit`; **`GET /staff?role=dentist`** (router `app/routers/staff.py`) feeds the dropdowns. Demo data:
+`app/seed_demo.py`.
+
+### Design system + app shell (6.2, sidebar in 6.3)
 
 As of 6.2 the frontend has a real design system (warm/friendly, no new dep). Colour/radius **tokens**
 live in `app/globals.css` — a light `:root`, a `@media (prefers-color-scheme: dark)` block, and

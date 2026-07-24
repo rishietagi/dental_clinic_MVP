@@ -169,17 +169,32 @@ export function DayView() {
                           {a.patient_name}
                         </Link>
                       </td>
-                      <td className="px-3 py-2">{a.dentist_name ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        {a.dentist_name ?? "—"}
+                        {a.consulting_dentist_name && (
+                          <span className="block text-xs text-muted-foreground">
+                            + {a.consulting_dentist_name}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         <StatusBadge status={a.status} />
                       </td>
                       <td className="px-3 py-2">{a.reason ?? "—"}</td>
                       <td className="px-3 py-2">
-                        <StatusActions
-                          appt={a}
-                          onChanged={state.refetch}
-                          onNotice={setNotice}
-                        />
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusActions
+                            appt={a}
+                            onChanged={state.refetch}
+                            onNotice={setNotice}
+                          />
+                          <Link
+                            href={`/patients/${a.patient_id}/visits/new?appointment=${a.id}`}
+                            className="text-xs font-medium text-primary hover:underline"
+                          >
+                            Start visit →
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   ))}

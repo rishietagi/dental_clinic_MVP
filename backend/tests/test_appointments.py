@@ -655,3 +655,62 @@ def test_cancelling_frees_the_slot(as_staff):
         start_time=_iso(BASE), duration_min=30,
     )
     assert s_ok == 201
+
+
+# --- consulting dentist (6.3) ------------------------------------------------
+
+def test_book_with_consulting_dentist(as_staff):
+    """A second (consulting) dentist can be recorded on a booking, and comes back
+    with its name resolved in the day list."""
+    client, _staff_id = as_staff
+    pid = _make_patient()
+    primary = _make_dentist()
+    consulting = _make_dentist()
+
+    status_code, data = _book(
+        client,
+        patient_id=str(pid),
+        dentist_id=str(primary),
+        consulting_dentist_id=str(consulting),
+        start_time=_iso(BASE),
+        duration_min=30,
+    )
+    assert status_code == 201, data
+    assert data["consulting_dentist_id"] == str(consulting)
+
+    # The day list resolves both dentists' names.
+    day = BASE.date().isoformat()
+    items = client.get("/appointments", params={"date": day}).json()["items"]
+    row = next(i for i in items if i["id"] == data["id"])
+    assert row["dentist_name"] == "Dr Test"
+    assert row["consulting_dentist_name"] == "Dr Test"
+    assert row["consulting_dentist_id"] == str(consulting)
+
+
+def test_consulting_dentist_optional(as_staff):
+    """Omitting the consulting dentist is fine — most bookings have one dentist."""
+    client, _staff_id = as_staff
+    pid = _make_patient()
+    primary = _make_dentist()
+    status_code, data = _book(
+        client, patient_id=str(pid), dentist_id=str(primary),
+        start_time=_iso(BASE), duration_min=30,
+    )
+    assert status_code == 201
+    assert data["consulting_dentist_id"] is None
+
+
+def test_unknown_consulting_dentist_rejected(as_staff):
+    """A consulting dentist id that isn't an active staff member is a 422."""
+    client, _staff_id = as_staff
+    pid = _make_patient()
+    primary = _make_dentist()
+    status_code, _ = _book(
+        client,
+        patient_id=str(pid),
+        dentist_id=str(primary),
+        consulting_dentist_id=str(uuid.uuid4()),
+        start_time=_iso(BASE),
+        duration_min=30,
+    )
+    assert status_code == 422

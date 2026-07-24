@@ -323,6 +323,12 @@ function VisitRow({ visit }: { visit: Visit }) {
     <li className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0">
       <span className="text-sm text-muted-foreground">
         {formatVisitDate(visit.visit_date)}
+        {visit.dentist_name && (
+          <span> · {visit.dentist_name}</span>
+        )}
+        {visit.consulting_dentist_name && (
+          <span> + {visit.consulting_dentist_name}</span>
+        )}
       </span>
       {visit.complaint && visit.complaint.trim() && (
         <p className="text-sm">

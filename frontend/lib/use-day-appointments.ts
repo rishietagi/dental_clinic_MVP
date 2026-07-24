@@ -16,6 +16,8 @@ export type AppointmentListItem = {
   patient_name: string;
   dentist_id: string | null;
   dentist_name: string | null;
+  consulting_dentist_id: string | null;
+  consulting_dentist_name: string | null;
   treatment_id: string | null;
   start_time: string;
   duration_min: number;

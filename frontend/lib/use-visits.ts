@@ -39,6 +39,9 @@ export type Visit = {
   treatment_id: string;
   appointment_id: string | null;
   dentist_id: string | null;
+  dentist_name: string | null;
+  consulting_dentist_id: string | null;
+  consulting_dentist_name: string | null;
   visit_date: string;
   complaint: string | null;
   clinical_notes: string | null;
@@ -62,6 +65,7 @@ export type VisitCreateBody = TreatmentChoice & {
   patient_id: string;
   appointment_id?: string | null;
   dentist_id?: string | null;
+  consulting_dentist_id?: string | null;
   visit_date?: string | null;
   complaint?: string | null;
   clinical_notes?: string | null;

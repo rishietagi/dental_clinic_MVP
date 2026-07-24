@@ -12,6 +12,7 @@ from app.routers import (
     patient_files,
     patients,
     reports,
+    staff,
     treatment_items,
     treatments,
     visits,
@@ -37,6 +38,7 @@ app.include_router(visits.router)
 app.include_router(invoices.router)
 app.include_router(patient_files.router)
 app.include_router(reports.router)
+app.include_router(staff.router)
 
 
 @app.get("/health")

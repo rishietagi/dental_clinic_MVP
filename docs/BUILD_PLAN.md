@@ -491,7 +491,7 @@ and executed in Phase 7, once there's something worth deploying.
 ### PHASE 6 — Reports & local polish
 | 6.1 | Reports: revenue trend, procedure mix, no-show rate — **DONE** (`/reports`, Recharts, clinic-zone buckets, dentist/admin) | `feat: add practice reports` |
 | 6.2 | Error states, loading states, empty states | `feat: polish UI states` |
-| 6.3 | Demo run: show your mother, collect feedback, fix what's wrong | `fix: address usability feedback` |
+| 6.3 | Demo run + usability overhaul: **left sidebar + full-width layout, standalone New Patient (`/patients/new`) + Schedule Appointment (`/appointments/new`) screens (the §6 "New/Edit appointment" + "New/Edit patient" views, finally built), a chairside/visit flow (calendar → Start visit → Save & draft invoice), a consulting/second dentist (handoff) on appointments + visits, a `/staff` endpoint for dentist dropdowns, and `app/seed_demo.py` demo data + validation tests.** (Done 2026-07-24; further demo feedback ongoing.) | `feat: address usability feedback` |
 
 > Milestone: feature-complete on localhost. **Demo it to your mother before deploying** —
 > cheaper to fix now than after real data exists.
