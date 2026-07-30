@@ -17,7 +17,8 @@ full plan and roadmap), then this file (what actually happened).
 
 **Where we are: Phases 0–5 COMPLETE (+ the 5.6 uploads interlude). PHASE 6 IN PROGRESS —
 6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo/invoices-ledger/routing/UI-library ·
-6.5 manage dentists + by-dentist analytics · 6.6 Lab Management — all DONE.
+6.5 manage dentists + by-dentist analytics · 6.6 Lab Management · 6.7 Pricing (treatments/medicine/
+consultation fees) — all DONE.
 Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
 
 > **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
@@ -71,17 +72,24 @@ After changing deps or a migration, **rebuild the image** (`docker compose build
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs (ONE source of truth — keep this block correct):**
-- **Migration head = `6b93975ddf46`** (the **14th**, `add lab management`, 6.6). Predecessor:
-  `19b4e1314059` (13th, `add consulting dentist`, 6.3).
+- **Migration head = `36f29754ba8d`** (the **15th**, `add item kind and consultation fee`, 6.7).
+  Predecessor: `6b93975ddf46` (14th, `add lab management`, 6.6).
 - **Fifteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
   `payment`, `patient_file`, **`lab`**, **`lab_case`**.
 - **Nine `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`, **`lab`**.
-- **264 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
-  **`app.seed_demo`** (full demo dataset incl. lab cases), `app.seed_labs_topup` (a one-off that adds
-  only the 6.6 lab demo rows to a DB seeded before 6.6 — `seed_demo` is marker-guarded; delete this
-  script once it's served its purpose).
+- **284 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
+  **`app.seed_demo`** (full demo dataset incl. lab cases, medicines + dentist fees),
+  `app.seed_labs_topup` and **`app.seed_pricing_topup`** (one-offs that add only the 6.6 lab / 6.7
+  pricing demo rows to a DB seeded earlier — `seed_demo` is marker-guarded; delete these once
+  they've served their purpose).
+- **The catalogue has KINDS now** (6.7): `treatment_item.kind` is `treatment` | `medicine`, and the
+  unique is composite **`(kind, name)`** — not bare `name`. The **consultation fee is NOT a kind**:
+  it's `staff_user.consultation_fee` (nullable = "not set", ≠ 0.00), reaching invoices as a **custom
+  line**. `GET /treatment-items?kind=` is optional (omitted = all kinds); **`PATCH /staff/{id}`**
+  (admin) sets/clears the fee. Settings **Treatments → "Pricing"** (route `/settings/treatments`
+  unchanged) with three tabs.
 - **Human-readable ids exist now** (6.6): `appointment.number` → shown **`A-1042`**, `lab_case.number`
   → **`L-1042`**. Both come from Postgres sequences (start 1001); the migration **backfilled** the 25
   existing appointments. The `A-`/`L-` prefixes are display-only. **Gotcha:** a `number` column needs
@@ -358,6 +366,7 @@ the original step instructions say otherwise:
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
 | **Lab work: the appointment CLOSES, the lab case tracks the wait (6.6)** | "should the appointment stay open / get a 'waiting on lab' status?" | **No new appointment status.** When a sample goes out the appointment still finishes `done` — that sitting happened, and an appointment is a **calendar slot**, so holding it open for days would make the calendar claim the dentist is busy on a past day; `done`/`cancelled` are also terminal by design and the slot-freeing rules depend on it. The wait lives on `lab_case` (`sent → received`, + `cancelled`), while the **treatment** stays `in_progress` so the patient still appears on the follow-up report. **Don't add a `waiting_on_lab` status** — it was considered and deliberately rejected. Lifecycle is only two working states (user's call, for simplicity); because there's no "fitted" state, **`lab_case.follow_up_done`** is a dismiss flag powering the dashboard's "Back from lab — call the patient in" list, so a returned crown can't sit in a drawer. Lab work is **any-active-staff** (front-desk), not dentist-gated. | `backend/app/models/lab_case.py`, `backend/app/services/lab.py` |
+| **Pricing has TWO mechanisms: medicine is a catalogue `kind`, the consultation fee is per-dentist (6.7)** | `treatment_item` = "the treatment catalogue", one flat priced list | The clinic charges for three things. **Medicine** is a `kind` on `treatment_item` (`treatment`\|`medicine`) so it rides the existing `treatment_item → procedure_performed → invoice_line` pipeline unchanged — 5.2 price snapshot and procedure-mix reporting come free. **The consultation fee is deliberately NOT a kind**: it is per-dentist (`staff_user.consultation_fee`), so it has no catalogue row, cannot be a `procedure_performed` (that FK points at `treatment_item`), and reaches an invoice as an **`extra_lines` custom line** — carried from the visit screen as `?consult=<amount>\|<dentist name>` (a dentist's name is not patient PII, so the no-identifiers-in-URLs rule holds). The fee is **nullable = "not set", which is NOT 0.00**, and is **offered with an Add button, never auto-added** — auto-adding would silently re-bill a consultation on every follow-up sitting. **`kind` is absent from PATCH**: re-kinding a live item would move already-billed revenue between report buckets. The unique became composite **`(kind, name)`**, and `routers/treatment_items.py` had to stop matching the dropped `ix_treatment_item_name` string or duplicates would 500 instead of 409. | `backend/app/models/treatment_item.py`, `backend/app/models/staff_user.py`, `frontend/app/settings/treatments/` |
 | **Human-readable ids: `A-1042` / `L-1042` via sequences (6.6)** | everything was a raw UUID | The app had **no readable ids** — unusable when the receptionist must quote a case to a lab on the phone. `appointment.number` + `lab_case.number` are Integers fed by **Postgres sequences** (start 1001); the `A-`/`L-` prefixes are **display-only** (not stored). The migration added `appointment.number` **nullable → backfilled → NOT NULL** (adding NOT NULL to a populated table fails), then `setval` past the max, and `ALTER SEQUENCE ... OWNED BY` so downgrade drops the sequences. **Critical gotcha:** the model column MUST carry `server_default=text("nextval('...')")` — without it SQLAlchemy sends an explicit NULL and every insert fails (this bit, and would have broken appointment booking too). | `backend/alembic/versions/6b93975ddf46_*.py`, `backend/app/models/lab_case.py` |
 | **Dentists are name-only records, not logins — shared-login model (6.5)** | staff_user.id = Supabase UUID; "add dentist" sounds like "create login" | The clinic runs the app under a **single shared receptionist login**; dentists don't each sign in. So `POST /staff` creates a `staff_user` row with a **random local UUID** (name + email as info, role dentist) purely to **assign** on appointments/visits and **attribute** in reports — **no Supabase Auth call, no migration**. This is the exception to "staff_user.id IS the Supabase Auth UUID" (true for the seeded admin who does log in). Soft **deactivate** (never delete — history resolves), admin-only writes. If a dentist ever needs to actually log in, that's a separate Supabase step (out of scope). **Reports break down by dentist** via the visit's primary `dentist_id` (`?dentist_id=` filter + a `by_dentist` block). | `backend/app/routers/staff.py`, `backend/app/services/reports.py` |
 | **Consulting (second) dentist + the view structure + `/staff` (6.3)** | Single `dentist_id`; no add-patient/booking UI; no `/staff` | Dental handoff (dentist A checks, hands treatment to dentist B) → **`consulting_dentist_id` FK on BOTH `appointment` AND `visit`** (nullable/optional; the visit is the permanent record so it's captured there too), migration `19b4e1314059` (13th; **name the FKs by hand** — the unnamed-drop downgrade trap). Labels **Primary dentist / Consulting dentist**. New **`GET /staff?role=`** (any active staff; id/name/roles only) feeds the dentist dropdowns. The app got its missing **views + entry points**: `/patients/new`, `/appointments/new`, quick-action buttons on dashboard/patients/calendar, and a **chairside flow** — day-view **Start visit** (`?appointment=<id>` prefill; appointment id in the query is NOT a patient id, so the no-PII rule holds) → visit form (+ consulting dentist) → **Save & draft invoice** → the 5.2 generate screen. **`app/seed_demo.py`** seeds a full demo dataset (idempotent via an audit marker). No new deps. | `backend/app/models/appointment.py`, `backend/app/models/visit.py`, `backend/app/routers/staff.py`, `frontend/app/appointments/new/`, `frontend/app/patients/new/`, `backend/app/seed_demo.py` |
@@ -381,6 +390,83 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-30 — Step 6.7: Pricing — treatments, medicine, per-dentist consultation fees
+
+**Status:** complete — Settings **Treatments** is now **Pricing** with three tabs, and all three
+charges are pickable while recording a visit. **284 backend tests pass** (+20); lint + build green;
+migration 15 applies/reverses/re-applies; stack up + topped-up demo data. Owner-requested demo
+feedback. **For commit.**
+
+### Why
+The clinic charges for three things; the app could price one. `treatment_item` (4.1) held dental
+procedures only, so **medicines** and the **consultation fee** had to be hand-typed as free-text
+custom lines on every invoice — the typo-prone, unreportable path BUILD_PLAN §1 rejected. Every
+hand-typed "Amoxicillin 500" is a different spelling in the procedure-mix report.
+
+### The design decisions (all confirmed with the user)
+1. **`kind` column on `treatment_item`, not new tables.** Medicines then ride the existing
+   `treatment_item → procedure_performed → invoice_line` pipeline for free, including the 5.2 price
+   snapshot and the procedure-mix report. Kinds: `treatment` | `medicine`.
+2. **The consultation fee is NOT a kind — it is per-dentist** (`staff_user.consultation_fee`).
+   Because it has no catalogue row it cannot become a `procedure_performed` (that FK points at
+   `treatment_item`), so it reaches an invoice as a **custom line** via the `extra_lines` mechanism
+   5.2 already provided. **Two different mechanisms on purpose.**
+3. **Fee is nullable — null means "not set", which is NOT 0.00.** The visit screen only offers a fee
+   that has actually been set, so nobody is shown a ₹0 consultation because a field was never filled.
+4. **Offered, never auto-charged.** The visit form shows the fee for that sitting's dentists with an
+   *Add to bill* button. Auto-adding would silently re-bill a consultation on every follow-up sitting.
+5. **Three separate visit-form sections** (user's choice over one grouped dropdown). The medicine
+   section **has no tooth field** — a tooth number on an antibiotic is noise.
+6. **`kind` is absent from PATCH.** Re-kinding a live item would move already-billed revenue between
+   report buckets, rewriting history. Retire and re-add instead. A test pins it.
+
+### Built — backend (migration 15, `36f29754ba8d`)
+- `treatment_item.kind` — NOT NULL, `server_default='treatment'`, so the 13 existing rows
+  **backfill in the same statement** (no separate UPDATE pass — contrast 6.6's `appointment.number`,
+  which had no sensible default). `staff_user.consultation_fee` — `Numeric(10,2)`, nullable.
+- **The unique on `treatment_item.name` became composite `(kind, name)`** — "Consultation" may name
+  both a procedure and a medicine, but not two medicines.
+- Hand-added both **CHECK constraints** (autogenerate emits none, as always): the kind vocabulary and
+  a non-negative fee. Named, so the downgrade can drop them. Verified **apply → downgrade → re-upgrade**.
+- `GET /treatment-items?kind=` (**optional**, so every pre-6.7 caller still sees the whole catalogue);
+  ordering is now `kind, name`. **`PATCH /staff/{id}`** (admin-only, audited) sets/clears the fee,
+  using `exclude_unset` so an omitted field differs from an explicit `null` (= clear).
+- Tests 264 → **284**: kind default/filter/422, same-name-across-kinds, duplicate-within-kind 409,
+  the PATCH re-kinding guard, fee set/clear/zero/negative/403/404, PATCH-doesn't-shadow-deactivate,
+  and **a medicine billing end-to-end with its catalogue link intact**.
+
+### Built — frontend
+- **Settings → Pricing** (`/settings/treatments`, route unchanged, sidebar label renamed): a `Tabs`
+  wrapper over **Treatments | Medicine | Consultation fee**. `treatment-list.tsx` is **parameterised
+  by kind** (one component, a `LABELS` map for wording) rather than copied. New
+  `consultation-fees.tsx` — a dentist fee table (null renders "— not set"; an empty box clears).
+- **Visit form** — `ProcedureRows` is kind-aware and rendered twice (Procedures with tooth, Medicine
+  without); the two lists are **concatenated at submit** since the API stores them identically. A new
+  `ConsultationFeeRows` offers the primary + consulting dentist's fee.
+- **Carrying the fee to the bill:** `?consult=<amount>|<dentist name>` (repeatable) on the
+  *Save & draft invoice* route; `generate-form.tsx` seeds them as **editable custom lines**. A
+  dentist's name is not a patient identifier, so the **no-PII-in-URLs rule holds**.
+- Seed: `seed_demo` gained 5 medicines + per-dentist fees; **`app/seed_pricing_topup.py`** (a one-off,
+  like `seed_labs_topup`) adds them to an already-seeded DB — ran live: 6 medicines, 4 dentists priced.
+
+### Gotcha hit + fixed (worth remembering)
+`routers/treatment_items.py` detected duplicates by matching the string **`ix_treatment_item_name`**
+in the IntegrityError. Migration 15 replaced that index, so without the matching change a duplicate
+would have surfaced as a **raw 500 instead of a friendly 409**. Now matched on
+`uq_treatment_item_kind_name`, with a test pinning both kinds. **Any renamed constraint needs its
+error-matching string updated too.**
+
+### What was NOT verified by me (honest note)
+The API + aggregates are test-proven and the UI builds/renders. **The click-through is the user's**
+(real auth): Settings → Pricing shows three tabs; add a medicine and set a dentist's fee; record a
+visit picking a procedure **and** a medicine **and** adding the consultation fee → *Save & draft
+invoice* → confirm all three land on the bill at the right prices; check Reports still renders.
+
+### Suggested commit
+`feat: add pricing for medicines and per-dentist consultation fees`
 
 ---
 

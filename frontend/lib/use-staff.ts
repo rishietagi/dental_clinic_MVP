@@ -14,6 +14,10 @@ export type StaffMember = {
   email: string;
   roles: string[];
   active: boolean;
+  // What this dentist charges for a consultation (6.7). A decimal STRING, or
+  // null when no fee has been set — which is not the same as "0". The visit
+  // screen only offers a fee that has actually been set.
+  consultation_fee: string | null;
 };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -142,6 +146,35 @@ export async function createStaff(body: {
     return {
       status: "error",
       message: error instanceof Error ? error.message : "Could not add the staff member.",
+    };
+  }
+}
+
+// Edit a staff record — in practice, set or clear a dentist's consultation fee.
+//
+// Pass `consultation_fee: null` to CLEAR it; omit the key entirely to leave it
+// alone. The API distinguishes the two (exclude_unset), so the caller must not
+// send an explicit null it didn't mean.
+export async function updateStaff(
+  id: string,
+  changes: { name?: string; consultation_fee?: string | null },
+): Promise<StaffResult> {
+  if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
+  try {
+    const headers = await authHeaders();
+    if (!headers) return { status: "error", message: "Not signed in." };
+    const res = await fetch(`${apiUrl}/staff/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(changes),
+    });
+    if (res.ok) return { status: "ok", member: (await res.json()) as StaffMember };
+    if (res.status === 403) return { status: "forbidden" };
+    return { status: "error", message: `Request failed (${res.status}).` };
+  } catch (error: unknown) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : "Could not update the fee.",
     };
   }
 }

@@ -46,7 +46,9 @@ const NAV: NavItem[] = [
   { label: "Invoices", href: "/invoices", icon: Receipt },
   { label: "Lab", href: "/lab", icon: FlaskConical },
   { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
-  { label: "Treatments", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },
+  // Renamed "Treatments" -> "Pricing" in 6.7: the screen now covers treatments,
+  // medicines, and per-dentist consultation fees. The route is unchanged.
+  { label: "Pricing", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },
   { label: "Settings", href: "/settings/clinic", icon: Settings, anyOf: ["admin"] },
 ];
 

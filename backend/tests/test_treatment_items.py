@@ -104,10 +104,17 @@ def as_receptionist(db_available):
         _cleanup(db, staff)
 
 
-def _create(client: TestClient, name: str, price: str = "500.00"):
-    resp = client.post(
-        "/treatment-items", json={"name": name, "default_price": price}
-    )
+def _create(
+    client: TestClient,
+    name: str,
+    price: str = "500.00",
+    kind: str | None = None,
+):
+    """Create an item. `kind` omitted exercises the server-side default."""
+    body: dict = {"name": name, "default_price": price}
+    if kind is not None:
+        body["kind"] = kind
+    resp = client.post("/treatment-items", json=body)
     if resp.status_code == 201:
         _item_ids.append(uuid.UUID(resp.json()["id"]))
     return resp
@@ -232,3 +239,95 @@ def test_deactivate_is_soft_and_hidden_from_default_list(as_admin):
 
     # And it can come back.
     assert client.post(f"/treatment-items/{item_id}/activate").json()["active"] is True
+
+
+# --- kinds: treatments vs medicine (6.7) -------------------------------------
+
+def test_kind_defaults_to_treatment(as_admin):
+    """Omitting `kind` yields a treatment — what every pre-6.7 caller sends."""
+    client, _ = as_admin
+    resp = _create(client, _unique("Scaling"))
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["kind"] == "treatment"
+
+
+def test_can_create_a_medicine(as_admin):
+    client, _ = as_admin
+    resp = _create(client, _unique("Amoxicillin 500mg"), "45.00", kind="medicine")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["kind"] == "medicine"
+    assert resp.json()["default_price"] == "45.00"
+
+
+def test_unknown_kind_rejected(as_admin):
+    """The kind vocabulary is pinned by a Literal -> 422 well before the DB CHECK."""
+    client, _ = as_admin
+    assert _create(client, _unique("Odd"), kind="consultation").status_code == 422
+    assert _create(client, _unique("Odder"), kind="").status_code == 422
+
+
+def test_kind_filter_narrows_the_list(as_admin):
+    client, _ = as_admin
+    treatment = _unique("Filling")
+    medicine = _unique("Ibuprofen")
+    _create(client, treatment, kind="treatment")
+    _create(client, medicine, "20.00", kind="medicine")
+
+    meds = client.get("/treatment-items", params={"kind": "medicine"}).json()["items"]
+    names = {i["name"] for i in meds}
+    assert medicine in names
+    assert treatment not in names
+    assert all(i["kind"] == "medicine" for i in meds)
+
+    treatments = client.get("/treatment-items", params={"kind": "treatment"}).json()["items"]
+    assert treatment in {i["name"] for i in treatments}
+    assert all(i["kind"] == "treatment" for i in treatments)
+
+
+def test_unfiltered_list_returns_every_kind(as_admin):
+    """No `kind` param = the whole catalogue, so pre-6.7 callers are unaffected."""
+    client, _ = as_admin
+    treatment = _unique("Extraction")
+    medicine = _unique("Paracetamol")
+    _create(client, treatment, kind="treatment")
+    _create(client, medicine, "15.00", kind="medicine")
+
+    names = {i["name"] for i in client.get("/treatment-items").json()["items"]}
+    assert {treatment, medicine} <= names
+
+
+def test_same_name_allowed_across_kinds(as_admin):
+    """The unique is on (kind, name): one word may be both a procedure and a drug."""
+    client, _ = as_admin
+    name = _unique("Consultation")
+    assert _create(client, name, kind="treatment").status_code == 201
+    assert _create(client, name, "50.00", kind="medicine").status_code == 201
+
+
+def test_duplicate_within_a_kind_conflicts(as_admin):
+    """A friendly 409, not a raw IntegrityError — the constraint name the router
+    matches on changed in 6.7, so this pins that they still agree."""
+    client, _ = as_admin
+    name = _unique("Crown")
+    assert _create(client, name, kind="treatment").status_code == 201
+    assert _create(client, name, kind="treatment").status_code == 409
+
+    med = _unique("Metronidazole")
+    assert _create(client, med, "30.00", kind="medicine").status_code == 201
+    assert _create(client, med, "30.00", kind="medicine").status_code == 409
+
+
+def test_kind_cannot_be_changed_by_patch(as_admin):
+    """Re-kinding would silently move already-billed revenue between report
+    buckets, so PATCH ignores the field. Retire and re-add instead."""
+    client, _ = as_admin
+    created = _create(client, _unique("Bridge"), kind="treatment")
+    item_id = created.json()["id"]
+
+    resp = client.patch(
+        f"/treatment-items/{item_id}",
+        json={"kind": "medicine", "default_price": "600.00"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["kind"] == "treatment"  # unchanged
+    assert resp.json()["default_price"] == "600.00"  # the real edit still applied

@@ -12,7 +12,9 @@
 Items are **deactivated, never deleted**, so historical visits/invoices that point
 at an item keep resolving. There is no DELETE route.
 
-`name` is unique — a duplicate returns 409 rather than a raw constraint error.
+`name` is unique **within a kind** (6.7) — a duplicate returns 409 rather than a
+raw constraint error. Across kinds the same name is fine: "Consultation" may be
+both a procedure and a medicine.
 """
 
 from uuid import UUID
@@ -28,6 +30,7 @@ from app.db import get_db
 from app.models.staff_user import StaffUser
 from app.models.treatment_item import TreatmentItem
 from app.schemas.treatment_item import (
+    ItemKind,
     TreatmentItemCreate,
     TreatmentItemListResponse,
     TreatmentItemRead,
@@ -37,7 +40,12 @@ from app.services.audit import record_audit
 
 router = APIRouter(prefix="/treatment-items", tags=["treatment-items"])
 
-_DUPLICATE_DETAIL = "A treatment with that name already exists."
+_DUPLICATE_DETAIL = "An item of that kind with that name already exists."
+
+# The composite unique from migration 36f29754ba8d. 6.7 replaced the old
+# single-column `ix_treatment_item_name`; matching on the stale name here would
+# have let a duplicate surface as a raw 500 instead of a friendly 409.
+_DUPLICATE_CONSTRAINT = "uq_treatment_item_kind_name"
 
 
 def _get_or_404(db: Session, item_id: UUID) -> TreatmentItem:
@@ -55,7 +63,7 @@ def _commit_or_duplicate(db: Session) -> None:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        if "ix_treatment_item_name" in str(exc.orig):
+        if _DUPLICATE_CONSTRAINT in str(exc.orig):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=_DUPLICATE_DETAIL
             ) from exc
@@ -65,20 +73,29 @@ def _commit_or_duplicate(db: Session) -> None:
 @router.get("", response_model=TreatmentItemListResponse)
 def list_treatment_items(
     include_inactive: bool = Query(default=False),
+    kind: ItemKind | None = Query(
+        default=None, description="Filter to one kind. Omit for all kinds."
+    ),
     db: Session = Depends(get_db),
     staff: StaffUser = Depends(get_current_staff),
 ) -> TreatmentItemListResponse:
-    """The catalogue, ordered by name. Any active staff may read it.
+    """The catalogue, ordered by kind then name. Any active staff may read it.
 
     Inactive (retired) items are hidden unless include_inactive=true — pickers
     want only live items, but Settings needs to show and restore the retired ones.
+
+    `kind` is **optional and unfiltered by default** so every caller written
+    before 6.7 keeps seeing the whole catalogue; the Pricing tabs and the visit
+    form's separate sections pass it to get one kind at a time.
     """
     base = select(TreatmentItem)
     if not include_inactive:
         base = base.where(TreatmentItem.active.is_(True))
+    if kind is not None:
+        base = base.where(TreatmentItem.kind == kind)
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    rows = db.scalars(base.order_by(TreatmentItem.name)).all()
+    rows = db.scalars(base.order_by(TreatmentItem.kind, TreatmentItem.name)).all()
 
     return TreatmentItemListResponse(
         items=[TreatmentItemRead.model_validate(i) for i in rows],
@@ -108,7 +125,7 @@ def create_treatment_item(
         db.flush()  # assign the id (and surface a duplicate) before auditing
     except IntegrityError as exc:
         db.rollback()
-        if "ix_treatment_item_name" in str(exc.orig):
+        if _DUPLICATE_CONSTRAINT in str(exc.orig):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=_DUPLICATE_DETAIL
             ) from exc

@@ -1,6 +1,10 @@
 "use client";
 
-// The treatment catalogue table + admin editing.
+// The priced catalogue table + admin editing.
+//
+// ONE component serves both Pricing tabs (6.7): pass `kind="treatment"` or
+// `kind="medicine"` and the wording follows from the label map below. A copy
+// per kind would be two files to keep in step for no gain.
 //
 // Any staff sees the list. Admin-only controls (add / edit / retire) are hidden
 // for non-admins — but that is convenience, NOT security: the API rejects those
@@ -17,31 +21,57 @@ import {
   setItemActive,
   updateItem,
   useTreatmentItems,
+  type ItemKind,
   type MutationResult,
   type TreatmentItem,
 } from "@/lib/use-treatment-items";
 
+// Per-kind wording, so the shared table reads naturally in both tabs.
+const LABELS: Record<
+  ItemKind,
+  { one: string; many: string; column: string; placeholder: string; price: string }
+> = {
+  treatment: {
+    one: "treatment",
+    many: "treatments",
+    column: "Treatment",
+    placeholder: "e.g. Cleaning",
+    price: "500.00",
+  },
+  medicine: {
+    one: "medicine",
+    many: "medicines",
+    column: "Medicine",
+    placeholder: "e.g. Amoxicillin 500mg",
+    price: "45.00",
+  },
+};
+
 // Turn a MutationResult into a user-facing message (null = success).
-function messageFor(result: MutationResult): string | null {
+function messageFor(result: MutationResult, kind: ItemKind): string | null {
   if (result === "ok") return null;
-  if (result === "forbidden") return "Only an admin can change the treatment list.";
-  if (result === "conflict") return "A treatment with that name already exists.";
+  if (result === "forbidden")
+    return `Only an admin can change the ${LABELS[kind].one} list.`;
+  if (result === "conflict")
+    return `A ${LABELS[kind].one} with that name already exists.`;
   return result.error;
 }
 
-function AddForm({ onAdded }: { onAdded: () => void }) {
+function AddForm({ kind, onAdded }: { kind: ItemKind; onAdded: () => void }) {
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const labels = LABELS[kind];
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !price.trim()) return;
     setBusy(true);
-    const result = await createItem(name.trim(), price.trim());
+    const result = await createItem(name.trim(), price.trim(), kind);
     setBusy(false);
-    const msg = messageFor(result);
+    const msg = messageFor(result, kind);
     setError(msg);
     if (!msg) {
       setName("");
@@ -54,27 +84,27 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
     <form onSubmit={submit} className="flex flex-col gap-2">
       <div className="flex flex-wrap items-end gap-2">
         <div className="flex flex-col gap-1">
-          <label htmlFor="new-name" className="text-xs text-muted-foreground">
-            Treatment
+          <label htmlFor={`new-name-${kind}`} className="text-xs text-muted-foreground">
+            {labels.column}
           </label>
           <Input
-            id="new-name"
+            id={`new-name-${kind}`}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Cleaning"
+            placeholder={labels.placeholder}
             className="w-56"
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label htmlFor="new-price" className="text-xs text-muted-foreground">
+          <label htmlFor={`new-price-${kind}`} className="text-xs text-muted-foreground">
             Default price (₹)
           </label>
           <Input
-            id="new-price"
+            id={`new-price-${kind}`}
             value={price}
             onChange={(e) => setPrice(e.target.value)}
             inputMode="decimal"
-            placeholder="500.00"
+            placeholder={labels.price}
             className="w-32"
           />
         </div>
@@ -89,11 +119,13 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
 
 function Row({
   item,
+  kind,
   canEdit,
   onChanged,
   onError,
 }: {
   item: TreatmentItem;
+  kind: ItemKind;
   canEdit: boolean;
   onChanged: () => void;
   onError: (msg: string | null) => void;
@@ -110,7 +142,7 @@ function Row({
       default_price: price.trim(),
     });
     setBusy(false);
-    const msg = messageFor(result);
+    const msg = messageFor(result, kind);
     onError(msg);
     if (!msg) {
       setEditing(false);
@@ -122,7 +154,7 @@ function Row({
     setBusy(true);
     const result = await setItemActive(item.id, !item.active);
     setBusy(false);
-    onError(messageFor(result));
+    onError(messageFor(result, kind));
     onChanged();
   }
 
@@ -194,23 +226,24 @@ function Row({
   );
 }
 
-export function TreatmentList() {
+export function TreatmentList({ kind = "treatment" }: { kind?: ItemKind }) {
   const [includeInactive, setIncludeInactive] = useState(false);
-  const state = useTreatmentItems(includeInactive);
+  const state = useTreatmentItems(includeInactive, kind);
   const staffState = useCurrentStaff();
   const [notice, setNotice] = useState<string | null>(null);
 
+  const labels = LABELS[kind];
   const canEdit =
     staffState.kind === "staff" && staffState.staff.roles.includes("admin");
 
   return (
     <div className="flex flex-col gap-4">
       {canEdit ? (
-        <AddForm onAdded={state.refetch} />
+        <AddForm kind={kind} onAdded={state.refetch} />
       ) : (
         staffState.kind === "staff" && (
           <p className="text-sm text-muted-foreground">
-            Only an admin can change the treatment list.
+            Only an admin can change the {labels.one} list.
           </p>
         )
       )}
@@ -221,7 +254,7 @@ export function TreatmentList() {
           checked={includeInactive}
           onChange={(e) => setIncludeInactive(e.target.checked)}
         />
-        Show retired treatments
+        Show retired {labels.many}
       </label>
 
       {notice && <p className="text-sm text-destructive">{notice}</p>}
@@ -231,26 +264,26 @@ export function TreatmentList() {
       )}
       {state.kind === "error" && (
         <p className="text-sm text-destructive">
-          Couldn’t load treatments: {state.message}
+          Couldn’t load {labels.many}: {state.message}
         </p>
       )}
 
       {state.kind === "ready" && (
         <>
           <p className="text-sm text-muted-foreground">
-            {state.data.total} {state.data.total === 1 ? "treatment" : "treatments"}
+            {state.data.total} {state.data.total === 1 ? labels.one : labels.many}
           </p>
 
           {state.data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No treatments yet{canEdit ? " — add the first one above." : "."}
+              No {labels.many} yet{canEdit ? " — add the first one above." : "."}
             </p>
           ) : (
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/50 text-left text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 font-medium">Treatment</th>
+                    <th className="px-3 py-2 font-medium">{labels.column}</th>
                     <th className="px-3 py-2 font-medium">Default price</th>
                     <th className="px-3 py-2 font-medium">State</th>
                     <th className="px-3 py-2 font-medium">Actions</th>
@@ -261,6 +294,7 @@ export function TreatmentList() {
                     <Row
                       key={item.id}
                       item={item}
+                      kind={kind}
                       canEdit={canEdit}
                       onChanged={state.refetch}
                       onError={setNotice}

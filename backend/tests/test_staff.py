@@ -95,7 +95,17 @@ def test_lists_active_staff(env):
     assert str(ns["dentist_id"]) in ids
     assert str(ns["inactive_id"]) not in ids  # inactive excluded by default
     row = next(i for i in data["items"] if i["id"] == str(ns["dentist_id"]))
-    assert set(row.keys()) == {"id", "name", "email", "roles", "active"}
+    # Pinned so a new column can't leak out of the model by accident.
+    # `consultation_fee` joined the summary deliberately in 6.7 — the Pricing
+    # screen and the visit form both read it from here.
+    assert set(row.keys()) == {
+        "id",
+        "name",
+        "email",
+        "roles",
+        "active",
+        "consultation_fee",
+    }
 
 
 def test_include_inactive(env):
@@ -162,3 +172,105 @@ def test_deactivate_hides_from_dropdown(env):
     assert on.status_code == 200
     assert on.json()["active"] is True
     assert sid in {i["id"] for i in client.get("/staff", params={"role": "dentist"}).json()["items"]}
+
+
+# --- consultation fee (6.7) --------------------------------------------------
+
+def _make_dentist(client, ns, **extra) -> str:
+    """Create a dentist and register it for cleanup; returns its id."""
+    body = {"name": "Dr. Fee", "email": f"{uuid.uuid4()}@clinic.local", **extra}
+    resp = client.post("/staff", json=body)
+    assert resp.status_code == 201, resp.text
+    sid = resp.json()["id"]
+    ns["created"].append(uuid.UUID(sid))
+    return sid
+
+
+def test_fee_defaults_to_unset(env):
+    """No fee given -> null, NOT 0. The visit screen offers nothing until it's set."""
+    client, ns = env
+    sid = _make_dentist(client, ns)
+    row = next(
+        i for i in client.get("/staff").json()["items"] if i["id"] == sid
+    )
+    assert row["consultation_fee"] is None
+
+
+def test_admin_sets_fee(env):
+    client, ns = env
+    sid = _make_dentist(client, ns)
+
+    resp = client.patch(f"/staff/{sid}", json={"consultation_fee": "300.00"})
+    assert resp.status_code == 200, resp.text
+    # Money crosses the wire as a string so the exact decimal survives.
+    assert resp.json()["consultation_fee"] == "300.00"
+
+    # And it is readable from the list the Pricing screen + visit form use.
+    row = next(i for i in client.get("/staff").json()["items"] if i["id"] == sid)
+    assert row["consultation_fee"] == "300.00"
+
+
+def test_fee_can_be_set_at_creation(env):
+    client, ns = env
+    sid = _make_dentist(client, ns, consultation_fee="450.50")
+    row = next(i for i in client.get("/staff").json()["items"] if i["id"] == sid)
+    assert row["consultation_fee"] == "450.50"
+
+
+def test_explicit_null_clears_the_fee(env):
+    """Sending null CLEARS it — distinct from omitting the field entirely."""
+    client, ns = env
+    sid = _make_dentist(client, ns, consultation_fee="300.00")
+
+    cleared = client.patch(f"/staff/{sid}", json={"consultation_fee": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["consultation_fee"] is None
+
+
+def test_omitted_field_leaves_fee_untouched(env):
+    """A PATCH that only renames must not wipe the fee (the exclude_unset rule)."""
+    client, ns = env
+    sid = _make_dentist(client, ns, consultation_fee="300.00")
+
+    renamed = client.patch(f"/staff/{sid}", json={"name": "Dr. Renamed"})
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Dr. Renamed"
+    assert renamed.json()["consultation_fee"] == "300.00"
+
+
+def test_zero_fee_is_allowed_and_distinct_from_unset(env):
+    """0.00 means 'charges nothing' — a real answer, not the absence of one."""
+    client, ns = env
+    sid = _make_dentist(client, ns)
+    resp = client.patch(f"/staff/{sid}", json={"consultation_fee": "0.00"})
+    assert resp.status_code == 200
+    assert resp.json()["consultation_fee"] == "0.00"
+
+
+def test_negative_fee_rejected(env):
+    client, ns = env
+    sid = _make_dentist(client, ns)
+    assert client.patch(f"/staff/{sid}", json={"consultation_fee": "-10.00"}).status_code == 422
+
+
+def test_receptionist_cannot_set_fee(env):
+    """Pricing is an admin decision — enforced on the API, not just hidden in the UI."""
+    client, ns = env
+    sid = _make_dentist(client, ns)
+    ns["act_as"](ns["recep"])
+    assert client.patch(f"/staff/{sid}", json={"consultation_fee": "999.00"}).status_code == 403
+
+
+def test_patch_unknown_staff_404(env):
+    client, ns = env
+    resp = client.patch(f"/staff/{uuid.uuid4()}", json={"consultation_fee": "100.00"})
+    assert resp.status_code == 404
+
+
+def test_patch_does_not_shadow_deactivate_route(env):
+    """`PATCH /staff/{id}` must not swallow `/staff/{id}/deactivate` (the
+    literal-before-{id} family of bugs). Both still work."""
+    client, ns = env
+    sid = _make_dentist(client, ns)
+    assert client.patch(f"/staff/{sid}", json={"consultation_fee": "100.00"}).status_code == 200
+    assert client.post(f"/staff/{sid}/deactivate").status_code == 200

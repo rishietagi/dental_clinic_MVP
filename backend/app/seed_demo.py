@@ -57,9 +57,19 @@ CATALOGUE = [
     ("X-ray (IOPA)", "300.00"),
 ]
 
+# Medicines dispensed at the chair (6.7). Same table as CATALOGUE, kind='medicine'.
+MEDICINES = [
+    ("Amoxicillin 500mg", "45.00"),
+    ("Metronidazole 400mg", "35.00"),
+    ("Ibuprofen 400mg", "25.00"),
+    ("Paracetamol 650mg", "20.00"),
+    ("Chlorhexidine mouthwash", "150.00"),
+]
+
+# (name, email, consultation_fee) — the fee is per-dentist (6.7).
 DENTISTS = [
-    ("Dr. Meera Prabhu", "meera.demo@clinic.local"),
-    ("Dr. Anil Kamath", "anil.demo@clinic.local"),
+    ("Dr. Meera Prabhu", "meera.demo@clinic.local", "500.00"),
+    ("Dr. Anil Kamath", "anil.demo@clinic.local", "300.00"),
 ]
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"demo-xray-bytes" * 8
@@ -83,11 +93,16 @@ def seed_demo() -> None:
 
         # --- dentists (staff_user rows for assignment/display) ---
         dentists = []
-        for name, email in DENTISTS:
+        for name, email, fee in DENTISTS:
             existing = db.scalar(select(StaffUser).where(StaffUser.email == email))
             if existing is None:
                 d = StaffUser(
-                    id=uuid4(), name=name, email=email, roles=["dentist"], active=True
+                    id=uuid4(),
+                    name=name,
+                    email=email,
+                    roles=["dentist"],
+                    active=True,
+                    consultation_fee=Decimal(fee),
                 )
                 db.add(d)
                 dentists.append(d)
@@ -95,16 +110,37 @@ def seed_demo() -> None:
                 dentists.append(existing)
         db.flush()
 
-        # --- treatment catalogue ---
+        # --- priced catalogue: treatments + medicines (6.7) ---
+        # `items` stays treatments-only: it feeds the procedure/invoice generation
+        # below, and a demo bill of nothing but antibiotics would be odd.
         items = []
         for name, price in CATALOGUE:
-            existing = db.scalar(select(TreatmentItem).where(TreatmentItem.name == name))
+            existing = db.scalar(
+                select(TreatmentItem).where(
+                    TreatmentItem.kind == "treatment", TreatmentItem.name == name
+                )
+            )
             if existing is None:
-                it = TreatmentItem(name=name, default_price=Decimal(price))
+                it = TreatmentItem(
+                    name=name, default_price=Decimal(price), kind="treatment"
+                )
                 db.add(it)
                 items.append(it)
             else:
                 items.append(existing)
+
+        for name, price in MEDICINES:
+            existing = db.scalar(
+                select(TreatmentItem).where(
+                    TreatmentItem.kind == "medicine", TreatmentItem.name == name
+                )
+            )
+            if existing is None:
+                db.add(
+                    TreatmentItem(
+                        name=name, default_price=Decimal(price), kind="medicine"
+                    )
+                )
         db.flush()
 
         # --- patients (reuse the existing generator; add if the table is thin) ---

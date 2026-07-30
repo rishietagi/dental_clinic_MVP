@@ -14,9 +14,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 
+// 'treatment' (a dental procedure) or 'medicine'. The clinic's third charge,
+// the consultation fee, is per-dentist and lives on the staff record instead —
+// see lib/use-staff.ts.
+export type ItemKind = "treatment" | "medicine";
+
 export type TreatmentItem = {
   id: string;
   name: string;
+  kind: ItemKind;
   default_price: string;
   active: boolean;
   created_at: string;
@@ -54,8 +60,12 @@ function classify(res: Response): MutationResult {
   return { error: `Request failed (${res.status}).` };
 }
 
+// `kind` omitted = the whole catalogue (what callers written before 6.7 want);
+// pass one to get a single kind, as the Pricing tabs and the visit form's
+// separate sections do.
 export function useTreatmentItems(
   includeInactive: boolean,
+  kind?: ItemKind,
 ): State & { refetch: () => void } {
   const [state, setState] = useState<State>(
     apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
@@ -73,10 +83,14 @@ export function useTreatmentItems(
         const headers = await authHeaders();
         if (!headers) throw new Error("Not signed in.");
 
-        const res = await fetch(
-          `${apiUrl}/treatment-items?include_inactive=${includeInactive}`,
-          { headers },
-        );
+        const params = new URLSearchParams({
+          include_inactive: String(includeInactive),
+        });
+        if (kind) params.set("kind", kind);
+
+        const res = await fetch(`${apiUrl}/treatment-items?${params}`, {
+          headers,
+        });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Result;
@@ -84,7 +98,7 @@ export function useTreatmentItems(
       } catch (error: unknown) {
         if (!cancelled) {
           const message =
-            error instanceof Error ? error.message : "Could not load treatments.";
+            error instanceof Error ? error.message : "Could not load the catalogue.";
           setState({ kind: "error", message });
         }
       }
@@ -93,7 +107,8 @@ export function useTreatmentItems(
     return () => {
       cancelled = true;
     };
-  }, [includeInactive, nonce]);
+    // `kind` is a dependency: switching Pricing tabs must refetch.
+  }, [includeInactive, kind, nonce]);
 
   return { ...state, refetch };
 }
@@ -101,6 +116,7 @@ export function useTreatmentItems(
 export async function createItem(
   name: string,
   defaultPrice: string,
+  kind: ItemKind = "treatment",
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
@@ -109,7 +125,7 @@ export async function createItem(
     const res = await fetch(`${apiUrl}/treatment-items`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ name, default_price: defaultPrice }),
+      body: JSON.stringify({ name, default_price: defaultPrice, kind }),
     });
     return classify(res);
   } catch (error: unknown) {

@@ -30,7 +30,11 @@ import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { usePatient } from "@/lib/use-patient";
 import { useStaff } from "@/lib/use-staff";
-import { formatPrice, useTreatmentItems } from "@/lib/use-treatment-items";
+import {
+  formatPrice,
+  useTreatmentItems,
+  type ItemKind,
+} from "@/lib/use-treatment-items";
 import { usePatientTreatments, type Treatment } from "@/lib/use-treatments";
 import {
   recordVisit,
@@ -67,7 +71,10 @@ export function VisitForm({ patientId }: { patientId: string }) {
   const patientState = usePatient(patientId);
   const staffState = useCurrentStaff();
   const treatmentsState = usePatientTreatments(patientId, { openOnly: true });
-  const itemsState = useTreatmentItems(false); // active catalogue items only
+  // Active catalogue items, split by kind (6.7) so the two sections each show
+  // only their own list.
+  const treatmentItemsState = useTreatmentItems(false, "treatment");
+  const medicineItemsState = useTreatmentItems(false, "medicine");
   const dentists = useStaff("dentist");
   const { settings } = useClinicSettings();
   const slotMinutes = settings.slot_minutes;
@@ -89,7 +96,18 @@ export function VisitForm({ patientId }: { patientId: string }) {
 
   const [complaint, setComplaint] = useState("");
   const [notes, setNotes] = useState("");
+  // Procedures and medicines are the SAME kind of row to the API (both are
+  // `procedure_performed` pointing at a catalogue item) but are kept in separate
+  // state so each section renders and edits only its own list. They're
+  // concatenated at submit.
   const [procedures, setProcedures] = useState<ProcedureInput[]>([]);
+  const [medicines, setMedicines] = useState<ProcedureInput[]>([]);
+  // Consultation fees chosen for this sitting (6.7). These are NOT catalogue
+  // items — the fee lives on the dentist — so they never become procedures.
+  // They ride to the invoice screen as custom lines.
+  const [consultFees, setConsultFees] = useState<
+    { dentistId: string; name: string; amount: string }[]
+  >([]);
   const [finished, setFinished] = useState(false);
 
   // Inline follow-up (4.6). Off by default; hidden when the treatment is being
@@ -229,7 +247,9 @@ export function VisitForm({ patientId }: { patientId: string }) {
       consulting_dentist_id: consultingId || null,
       complaint: complaint.trim() || null,
       clinical_notes: notes.trim() || null,
-      procedures: procedures.filter((p) => p.treatment_item_id),
+      // Both kinds go into the same list — the API stores them identically and
+      // the item's own `kind` is what distinguishes them later.
+      procedures: [...procedures, ...medicines].filter((p) => p.treatment_item_id),
       treatment_status: finished ? "completed" : "in_progress",
     } as VisitCreateBody;
 
@@ -257,7 +277,19 @@ export function VisitForm({ patientId }: { patientId: string }) {
     // "Draft invoice" closes the treat->bill loop: go to the generate-invoice
     // screen for the visit just recorded. Otherwise back to the profile.
     if (draftInvoiceRef.current) {
-      router.push(`/invoices/new/${result.visit.id}`);
+      // Any consultation fees chosen ride along as custom lines (6.7). They
+      // have no catalogue row, so there's nothing on the visit to read them
+      // back from — the query string is how they reach the invoice screen,
+      // where they're pre-filled and still editable.
+      //
+      // These carry a DENTIST's name and an amount. No patient identifier, so
+      // the "no patient identifiers in URLs" rule holds.
+      const qs = new URLSearchParams();
+      for (const fee of consultFees) {
+        qs.append("consult", `${fee.amount}|${fee.name}`);
+      }
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      router.push(`/invoices/new/${result.visit.id}${suffix}`);
       return;
     }
     // "Send to lab" carries the visit + appointment + patient into the lab form, so
@@ -489,7 +521,39 @@ export function VisitForm({ patientId }: { patientId: string }) {
               <ProcedureRows
                 procedures={procedures}
                 setProcedures={setProcedures}
-                itemsState={itemsState}
+                itemsState={treatmentItemsState}
+                kind="treatment"
+              />
+            </CardContent>
+          </Card>
+
+          {/* --- medicine (6.7) --- same rows, no tooth field --- */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Medicine given</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <ProcedureRows
+                procedures={medicines}
+                setProcedures={setMedicines}
+                itemsState={medicineItemsState}
+                kind="medicine"
+              />
+            </CardContent>
+          </Card>
+
+          {/* --- consultation fee (6.7) --- offered, never auto-charged --- */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Consultation fee</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <ConsultationFeeRows
+                dentists={dentistOptions}
+                primaryId={staffState.kind === "staff" ? staffState.staff.id : null}
+                consultingId={consultingId}
+                chosen={consultFees}
+                setChosen={setConsultFees}
               />
             </CardContent>
           </Card>
@@ -674,22 +738,48 @@ export function VisitForm({ patientId }: { patientId: string }) {
 
 type ItemsState = ReturnType<typeof useTreatmentItems>;
 
+// Per-kind wording + behaviour for the shared rows component. A tooth number is
+// meaningful on a procedure and noise on an antibiotic, so `tooth` gates it.
+const ROW_LABELS: Record<
+  ItemKind,
+  { picker: string; add: string; empty: string; none: string; tooth: boolean }
+> = {
+  treatment: {
+    picker: "Procedure",
+    add: "Add procedure",
+    empty: "No treatments in the catalogue yet.",
+    none: "None added. A visit can be recorded without procedures, but billing works from them.",
+    tooth: true,
+  },
+  medicine: {
+    picker: "Medicine",
+    add: "Add medicine",
+    empty: "No medicines in the catalogue yet.",
+    none: "None given.",
+    tooth: false,
+  },
+};
+
 function ProcedureRows({
   procedures,
   setProcedures,
   itemsState,
+  kind,
 }: {
   procedures: ProcedureInput[];
   setProcedures: (p: ProcedureInput[]) => void;
   itemsState: ItemsState;
+  kind: ItemKind;
 }) {
+  const labels = ROW_LABELS[kind];
+
   if (itemsState.kind === "loading") {
-    return <p className="text-sm text-muted-foreground">Loading catalogue…</p>;
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
   if (itemsState.kind === "error") {
     return (
       <p className="text-sm text-destructive">
-        Couldn’t load the treatment catalogue: {itemsState.message}
+        Couldn’t load the catalogue: {itemsState.message}
       </p>
     );
   }
@@ -699,8 +789,7 @@ function ProcedureRows({
   if (items.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No treatments in the catalogue yet. An admin can add them under Settings
-        → Treatments.
+        {labels.empty} An admin can add them under Settings → Pricing.
       </p>
     );
   }
@@ -714,10 +803,7 @@ function ProcedureRows({
   return (
     <>
       {procedures.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          None added. A visit can be recorded without procedures, but billing
-          (later) works from them.
-        </p>
+        <p className="text-sm text-muted-foreground">{labels.none}</p>
       )}
 
       {procedures.map((proc, index) => {
@@ -726,13 +812,13 @@ function ProcedureRows({
           <div key={index} className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col gap-1">
               <label
-                htmlFor={`proc-${index}`}
+                htmlFor={`${kind}-${index}`}
                 className="text-xs text-muted-foreground"
               >
-                Procedure
+                {labels.picker}
               </label>
               <select
-                id={`proc-${index}`}
+                id={`${kind}-${index}`}
                 value={proc.treatment_item_id}
                 onChange={(e) =>
                   update(index, { treatment_item_id: e.target.value })
@@ -746,21 +832,23 @@ function ProcedureRows({
                 ))}
               </select>
             </div>
-            <div className="flex flex-col gap-1">
-              <label
-                htmlFor={`tooth-${index}`}
-                className="text-xs text-muted-foreground"
-              >
-                Tooth (optional)
-              </label>
-              <Input
-                id={`tooth-${index}`}
-                value={proc.tooth_ref ?? ""}
-                onChange={(e) => update(index, { tooth_ref: e.target.value })}
-                placeholder="36"
-                className="w-24"
-              />
-            </div>
+            {labels.tooth && (
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor={`tooth-${kind}-${index}`}
+                  className="text-xs text-muted-foreground"
+                >
+                  Tooth (optional)
+                </label>
+                <Input
+                  id={`tooth-${kind}-${index}`}
+                  value={proc.tooth_ref ?? ""}
+                  onChange={(e) => update(index, { tooth_ref: e.target.value })}
+                  placeholder="36"
+                  className="w-24"
+                />
+              </div>
+            )}
             {/* Price is context only — never used in arithmetic here (money
                 stays a decimal string; totals are Phase 5's job). */}
             {item && (
@@ -793,9 +881,114 @@ function ProcedureRows({
             ])
           }
         >
-          Add procedure
+          {labels.add}
         </Button>
       </div>
+    </>
+  );
+}
+
+// The consultation-fee section (6.7).
+//
+// The fee is per-dentist, so this offers the fee belonging to THIS sitting's
+// dentists — the recording dentist and, if set, the consulting one. It is
+// **offered, never automatic**: a follow-up sitting must not silently re-bill a
+// consultation, so nothing is charged until someone clicks Add.
+//
+// A dentist with no fee set is listed but not addable — a ₹0 consultation the
+// receptionist never intended is worse than an obvious gap.
+function ConsultationFeeRows({
+  dentists,
+  primaryId,
+  consultingId,
+  chosen,
+  setChosen,
+}: {
+  dentists: { id: string; name: string; consultation_fee: string | null }[];
+  primaryId: string | null;
+  consultingId: string;
+  chosen: { dentistId: string; name: string; amount: string }[];
+  setChosen: (
+    f: { dentistId: string; name: string; amount: string }[],
+  ) => void;
+}) {
+  // The dentists relevant to this sitting, de-duplicated (the consulting
+  // dentist may be the same person as the recorder).
+  const relevant = [primaryId, consultingId || null]
+    .filter((id): id is string => Boolean(id))
+    .filter((id, i, all) => all.indexOf(id) === i)
+    .map((id) => dentists.find((d) => d.id === id))
+    .filter((d): d is (typeof dentists)[number] => Boolean(d));
+
+  if (relevant.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No dentist on this visit yet — pick one above to see their consultation
+        fee.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {relevant.map((d) => {
+        const already = chosen.some((c) => c.dentistId === d.id);
+        const role = d.id === primaryId ? "primary" : "consulting";
+
+        return (
+          <div key={d.id} className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="font-medium">{d.name}</span>
+            <span className="text-xs text-muted-foreground">({role})</span>
+
+            {d.consultation_fee === null ? (
+              <span className="text-xs text-muted-foreground">
+                No fee set — add one under Settings → Pricing.
+              </span>
+            ) : (
+              <>
+                <span className="tabular-nums text-muted-foreground">
+                  {formatPrice(d.consultation_fee)}
+                </span>
+                {already ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setChosen(chosen.filter((c) => c.dentistId !== d.id))
+                    }
+                  >
+                    Remove
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setChosen([
+                        ...chosen,
+                        {
+                          dentistId: d.id,
+                          name: d.name,
+                          amount: d.consultation_fee as string,
+                        },
+                      ])
+                    }
+                  >
+                    Add to bill
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      <p className="text-xs text-muted-foreground">
+        Added fees appear on the invoice when you choose “Save &amp; draft
+        invoice”. Nothing is charged unless you add it.
+      </p>
     </>
   );
 }

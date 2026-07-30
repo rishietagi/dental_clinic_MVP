@@ -67,14 +67,19 @@ def db_available() -> bool:
 
 
 class Ctx:
-    """The client, the acting staff, a patient, and two catalogue items."""
+    """The client, the acting staff, a patient, and three catalogue items.
 
-    def __init__(self, db, staff, patient, item_a, item_b):
+    `item_med` is a **medicine** (6.7): it must bill through exactly the same
+    procedure -> invoice-line pipeline as a treatment.
+    """
+
+    def __init__(self, db, staff, patient, item_a, item_b, item_med):
         self.db = db
         self.staff = staff
         self.patient = patient
         self.item_a = item_a
         self.item_b = item_b
+        self.item_med = item_med
         self.client = client
 
 
@@ -90,10 +95,15 @@ def _make_ctx(roles: list[str]) -> Ctx:
     patient = Patient(name="Invoice Test Patient")
     item_a = TreatmentItem(name=f"RCT {uuid.uuid4().hex[:8]}", default_price="4000.00")
     item_b = TreatmentItem(name=f"Scaling {uuid.uuid4().hex[:8]}", default_price="1500.00")
-    db.add_all([staff, patient, item_a, item_b])
+    item_med = TreatmentItem(
+        name=f"Amoxicillin {uuid.uuid4().hex[:8]}",
+        default_price="45.00",
+        kind="medicine",
+    )
+    db.add_all([staff, patient, item_a, item_b, item_med])
     db.commit()
     app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
-    return Ctx(db, staff, patient, item_a, item_b)
+    return Ctx(db, staff, patient, item_a, item_b, item_med)
 
 
 def _cleanup(ctx: Ctx) -> None:
@@ -137,6 +147,7 @@ def _cleanup(ctx: Ctx) -> None:
     for model, oid in [
         (TreatmentItem, ctx.item_a.id),
         (TreatmentItem, ctx.item_b.id),
+        (TreatmentItem, ctx.item_med.id),
         (Patient, ctx.patient.id),
         (StaffUser, ctx.staff.id),
     ]:
@@ -210,6 +221,56 @@ def test_generate_from_procedures(as_receptionist):
     assert data["amount_paid"] == "0.00"
     assert data["outstanding"] == "5500.00"
     assert data["payments"] == []
+
+
+def test_medicine_bills_like_a_treatment(as_receptionist):
+    """A medicine (6.7) rides the same catalogue pipeline as a procedure.
+
+    This is the regression that matters for the `kind` split: adding the column
+    must not change how a line is priced, frozen, or linked. One bill carries a
+    treatment and a medicine together — the clinic's actual case.
+    """
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id, ctx.item_med.id])
+
+    resp = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+
+    by_desc = {ln["description"]: ln for ln in data["lines"]}
+    assert by_desc[ctx.item_a.name]["amount"] == "4000.00"
+    assert by_desc[ctx.item_med.name]["amount"] == "45.00"
+    # The medicine keeps its catalogue link, so it still lands in reports as a
+    # named item rather than folding into "Other / custom".
+    assert by_desc[ctx.item_med.name]["treatment_item_id"] == str(ctx.item_med.id)
+    assert data["subtotal"] == "4045.00"
+    assert data["total"] == "4045.00"
+
+
+def test_consultation_fee_bills_as_a_custom_line(as_receptionist):
+    """The per-dentist consultation fee has no catalogue row, so it reaches the
+    invoice as an `extra_lines` entry (null treatment_item_id) — the mechanism
+    5.2 already provided. No backend change was needed for it."""
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
+
+    resp = ctx.client.post(
+        f"/visits/{visit_id}/invoice",
+        json={
+            "extra_lines": [
+                {"description": "Consultation — Dr. Meera Prabhu", "amount": "300.00"}
+            ]
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+
+    consult = next(
+        ln for ln in data["lines"] if ln["description"].startswith("Consultation")
+    )
+    assert consult["amount"] == "300.00"
+    assert consult["treatment_item_id"] is None
+    assert data["subtotal"] == "4300.00"
 
 
 def test_line_price_is_frozen(as_receptionist):

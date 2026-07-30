@@ -8,10 +8,16 @@
 //
 // After creation the invoice is fixed (no edit endpoint in Phase 5), which is why
 // the discount + custom lines are set here, before the POST.
+//
+// **Consultation fees (6.7)** arrive as `?consult=<amount>|<dentist name>`
+// repeated, set by the visit form's "Save & draft invoice". The fee is
+// per-dentist rather than a catalogue item, so it has no procedure row to be
+// read back from — the query string is how it gets here. They're pre-filled as
+// ordinary custom lines, so the biller can still edit or remove them.
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,12 +28,33 @@ import {
 } from "@/lib/use-invoices";
 import { useVisit } from "@/lib/use-visits";
 
+// Turn the `?consult=amount|name` params into pre-filled custom lines.
+// Malformed entries are skipped rather than shown as broken rows.
+function consultationLines(params: URLSearchParams): InvoiceLineInput[] {
+  return params
+    .getAll("consult")
+    .map((raw) => {
+      const sep = raw.indexOf("|");
+      if (sep === -1) return null;
+      const amount = raw.slice(0, sep).trim();
+      const name = raw.slice(sep + 1).trim();
+      if (!amount || !name) return null;
+      return { description: `Consultation — ${name}`, amount };
+    })
+    .filter((line): line is InvoiceLineInput => line !== null);
+}
+
 export function GenerateInvoiceForm({ visitId }: { visitId: string }) {
   const state = useVisit(visitId);
   const router = useRouter();
+  const params = useSearchParams();
 
   const [discount, setDiscount] = useState("");
-  const [extra, setExtra] = useState<InvoiceLineInput[]>([]);
+  // Seeded once from the URL: any consultation fees chosen on the visit screen
+  // start as editable custom lines.
+  const [extra, setExtra] = useState<InvoiceLineInput[]>(() =>
+    consultationLines(params),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);

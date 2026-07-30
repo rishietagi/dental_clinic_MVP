@@ -26,7 +26,12 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_staff, require_role
 from app.db import get_db
 from app.models.staff_user import StaffUser
-from app.schemas.staff import StaffCreate, StaffListResponse, StaffSummary
+from app.schemas.staff import (
+    StaffCreate,
+    StaffListResponse,
+    StaffSummary,
+    StaffUpdate,
+)
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/staff", tags=["staff"])
@@ -80,6 +85,7 @@ def create_staff(
         email=body.email,
         roles=body.roles,
         active=True,
+        consultation_fee=body.consultation_fee,
     )
     db.add(who)
     try:
@@ -95,6 +101,41 @@ def create_staff(
         entity="staff_user",
         entity_id=who.id,
         details=jsonable_encoder({"name": body.name, "email": body.email, "roles": body.roles}),
+    )
+    db.commit()
+    db.refresh(who)
+    return who
+
+
+@router.patch("/{staff_id}", response_model=StaffSummary)
+def update_staff(
+    staff_id: UUID,
+    body: StaffUpdate,
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(require_role("admin")),
+) -> StaffUser:
+    """Edit a staff record — in practice, set a dentist's consultation fee (6.7).
+
+    Uses `exclude_unset` so an omitted field is left alone while an explicitly
+    sent `"consultation_fee": null` **clears** the fee back to "not set". Those
+    are different intents and a plain None-check would conflate them.
+    """
+    who = _get_or_404(db, staff_id)
+
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        return who
+
+    for field, value in changes.items():
+        setattr(who, field, value)
+
+    record_audit(
+        db,
+        actor_id=staff.id,
+        action="update",
+        entity="staff_user",
+        entity_id=who.id,
+        details=jsonable_encoder(changes),
     )
     db.commit()
     db.refresh(who)
