@@ -249,6 +249,9 @@ def list_invoices(
     status_filter: str | None = Query(
         default=None, alias="status", description="Optional status filter (unpaid/partially_paid/paid)."
     ),
+    patient_id: UUID | None = Query(
+        default=None, description="Only this patient's invoices."
+    ),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -260,10 +263,19 @@ def list_invoices(
     `GET /invoices/{invoice_id}`, or FastAPI would parse the literal path
     "invoices" oddly / a bare id — this list has no id segment, so it's the same
     literal-before-`{id}` discipline the collections route follows.
+
+    **`patient_id` (6.8) — this was the bug.** Callers were already passing it and
+    FastAPI, which drops undeclared query params, silently returned **every
+    invoice in the clinic**. A "patient balance" built on that would have shown
+    one patient another's money. Declaring it is the fix; the test asserts it
+    NARROWS the result rather than merely returning 200, because the broken
+    version passed that weaker check.
     """
     base = select(Invoice)
     if status_filter is not None:
         base = base.where(Invoice.status == status_filter)
+    if patient_id is not None:
+        base = base.where(Invoice.patient_id == patient_id)
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
 

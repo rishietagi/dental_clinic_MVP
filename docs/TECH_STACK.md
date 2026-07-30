@@ -36,7 +36,7 @@ and is painful to trace. Local and container majors stay matched.
 | Tailwind CSS | 4.x | Utility CSS. **v4 is CSS-first** — no `tailwind.config.js`; configured via `@import "tailwindcss"` in `app/globals.css`. |
 | @tailwindcss/postcss | 4.x | The PostCSS plugin Tailwind 4 builds through. |
 | ESLint | 9.x | Linting, via `eslint-config-next`. |
-| shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `button`, `card`, `input`, `label`. |
+| shadcn/ui | CLI 4.13.x | Component source copied into `components/ui/`, not a dependency to version-lock. Currently: `badge`, `button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `separator`, `sonner`, `status-pill`, `table`, `tabs`, `tooltip`. **The primitives underneath are Base UI, not Radix — there is no `asChild`** (use `buttonVariants()` on a `Link` instead). |
 | recharts | 3.10.0 | Charts on the Reports screen (6.1) — React+SVG, React-19-compatible. Styled to the **dataviz** validated palette (`lib/chart-theme.ts`), theme-aware. First frontend charting dep. |
 
 ### Component library + toasts (6.4)
@@ -131,20 +131,28 @@ module), and **`patient`** (2.1 — soft-delete via `archived`, stores `date_of_
 computed `age` property). **Four migrations now:** empty root → `add_staff_user` →
 `add_audit_log` → `add_patient`.
 
-Backend app structure as of 2.5: `app/models/` (ORM), `app/schemas/` (Pydantic request/response
-contracts — added 2.2), `app/routers/` (`auth`, `patients`), `app/services/` (`audit`), two seed
-scripts (`app/seed.py` admin, `app/seed_patients.py` ~50 dev patients — stdlib only, no faker),
-plus `auth.py`/`config.py`/`db.py`. The **patient CRUD** router (`app/routers/patients.py`) is
-the first full resource API; **2.3 added `GET /patients` list+search** (plain `ILIKE`, no index
-yet). **Phase 2 is complete.**
+Backend app structure as of 6.9: `app/models/` (**15** ORM models), `app/schemas/` (Pydantic
+request/response contracts), `app/routers/` (`appointments`, `auth`, `clinic_settings`, `invoices`,
+`lab_cases`, `labs`, `patient_files`, `patients`, `reports`, `staff`, `treatment_items`,
+`treatments`, `visits`), `app/services/` (**9** modules: `audit`, `appointments`, `visits`,
+`treatments`, `clinic`, `billing`, `storage`, `reports`, `lab`), three seed scripts
+(`app/seed.py` admin, `app/seed_patients.py` dev patients, `app/seed_demo.py` a full simulated
+demo clinic — stdlib only, no faker), plus `auth.py`/`config.py`/`db.py`. **303 tests.**
 
-Frontend as of 2.4: the patient list `app/patients/` (search box + Tailwind results table) and
-the **profile page** `app/patients/[id]/` — the app's **first dynamic route** — with the
-medical-notes banner. Navigation uses `next/link` (built into Next; no new dep) via the
-`href`-aware `role-nav`; list rows link to profiles. Patient fetches reuse the authed
-browser-fetch pattern (`lib/use-patient-search.ts`, `lib/use-patient.ts`). Still only shadcn
-`button`/`card`/`input`/`label` — tables/banner are hand-rolled Tailwind (no table component
-added).
+Frontend as of 6.9: **17 routes** — dashboard `/` (today's schedule, collections, and the
+follow-up / ready-to-bill / nothing-recorded / lab worklists), `/calendar` (day + week, drag-drop),
+`/patients` + `/patients/new` + `/patients/[id]` (header with balance and next appointment, over
+Treatments · Billing · Appointments · Files · Details tabs) + `/patients/[id]/visits/new`
+(chairside), `/appointments/new`, `/invoices` + `/invoices/[id]` + `/receipt` +
+`/invoices/new/[visitId]`, `/lab` + `/lab/new`, `/reports`, `/settings/clinic`,
+`/settings/treatments` (Pricing), and `/login`.
+
+A persistent **app shell** (`components/app-shell.tsx`) wraps every signed-in page with a left
+sidebar, role-aware nav, and theme toggle; `/login` opts out. Data access is one hook module per
+resource in `lib/` (`use-patients`, `use-appointments`, `use-visits`, `use-invoices`, `use-labs`,
+`use-worklists`, …), all sharing the authed browser→Caddy→backend fetch pattern with a refetch
+nonce. Money crosses the wire as **decimal strings** and is formatted with `Intl.NumberFormat` —
+never float arithmetic.
 
 | Choice | Version | Why |
 |---|---|---|

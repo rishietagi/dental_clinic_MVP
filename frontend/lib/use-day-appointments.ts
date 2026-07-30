@@ -79,3 +79,55 @@ export function useDayAppointments(date: string): State & { refetch: () => void 
 
   return { ...state, refetch };
 }
+
+// One patient's whole appointment history, newest first (6.8).
+//
+// `GET /appointments?patient_id=` needs no date — which is the point: the
+// profile asks "when are they next in / when were they last here" without
+// knowing a date to look under. Before 6.8 this call 422'd, so the profile
+// could not show either fact.
+export function usePatientAppointments(
+  patientId: string,
+): State & { refetch: () => void } {
+  const [state, setState] = useState<State>(
+    apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
+  );
+  const [nonce, setNonce] = useState(0);
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      if (!cancelled) setState({ kind: "loading" });
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not signed in.");
+
+        const res = await fetch(`${apiUrl}/appointments?patient_id=${patientId}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+
+        const data = (await res.json()) as Result;
+        if (!cancelled) setState({ kind: "ready", data });
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message =
+            error instanceof Error ? error.message : "Could not load appointments.";
+          setState({ kind: "error", message });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId, nonce]);
+
+  return { ...state, refetch };
+}

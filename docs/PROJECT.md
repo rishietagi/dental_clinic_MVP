@@ -17,8 +17,12 @@ performed) · follow-up scheduling from inside the visit · billing & payments �
 basic reports · staff auth with three roles.
 
 **Out of scope** — decided, not deferred. Do not build these: prescriptions · treatment plans
-(quoted/estimated) · consent forms · dental charting / odontogram · inventory · lab work
-tracking · patient portal or any patient login · insurance claims.
+(quoted/estimated) · consent forms · dental charting / odontogram · inventory · patient portal
+or any patient login · insurance claims.
+
+Two things that *were* on that list and are now deliberately built, at the clinic owner's
+request: **patient file uploads** (X-rays/photos — opaque file storage, never charting) and
+**lab work tracking**. Do not "correct" them back out.
 
 ## Roles
 
@@ -33,28 +37,34 @@ person can be both dentist and admin without logging in twice.
 
 ## Current status
 
-- **Phase:** 0 — Foundation **(complete)**
-- **Step:** 0.6 — CI (GitHub Actions, tests only). Next: Phase 1 — auth & roles.
+- **Phase:** 6 — reports & local polish **(in progress)**. Phases 0–5 complete, plus the 5.6
+  uploads interlude.
+- **Step:** 6.9 done. Next: any further demo feedback, then **Phase 7 — deployment**.
+
+The app is **feature-complete on localhost** and still **local-only** — no deploy config exists
+before Phase 7. See [LOG.md](LOG.md) for the full record and the decisions behind it.
 
 ### What actually exists
 
-**Backend** (`backend/`)
-- A FastAPI app with a single `GET /health` endpoint.
-- Settings loaded from environment variables via pydantic-settings.
-- CORS middleware driven by the `CORS_ORIGINS` setting.
-- One test covering `/health`.
+**Backend** (`backend/`) — FastAPI + SQLAlchemy + Alembic, **303 tests**
+- **15 models**: `staff_user`, `audit_log`, `patient`, `appointment`, `treatment`, `visit`,
+  `procedure_performed`, `treatment_item`, `invoice`, `invoice_line`, `payment`,
+  `clinic_settings`, `patient_file`, `lab`, `lab_case`. 15 migrations.
+- **9 services**: `audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`,
+  `storage`, `reports`, `lab`.
+- Supabase JWT verification with roles read from **our** `staff_user.roles`; role guards on the
+  API, audit logging on mutations.
+- Double-booking prevented by a Postgres **GiST EXCLUDE** constraint — the DB is the guarantee.
 
-**Frontend** (`frontend/`)
-- A Next.js app with one page: the clinic name and a "System OK" card.
-- The card calls the backend's `/health` from the browser and shows loading, ok, or error.
-- shadcn/ui set up, with `button` and `card` added.
+**Frontend** (`frontend/`) — Next.js 16 + TS + Tailwind 4 + Base UI/shadcn
+- Dashboard (today's schedule, collections, and worklists for follow-ups, unbilled visits, lab
+  work), day/week calendar with drag-drop, patients + profile (header with balance/next
+  appointment, over tabs), chairside visit recording, billing + printable receipts, invoices
+  ledger, lab management, reports (Recharts), and settings (clinic, pricing, staff, labs).
+- Warm/mint design system with light + dark themes.
 
-**Infrastructure** (`docker-compose.yml`, `Caddyfile`)
-- The whole stack runs under Docker Compose: Caddy (`:80`) → frontend + backend, plus a
-  Postgres container. Caddy routes `/api/*` to the backend and everything else to the frontend.
-- Postgres runs but **nothing connects to it yet** — that's step 0.5.
-
-Nothing else. No database wiring, no models, no auth, no routing beyond the one page.
+**Infrastructure** (`docker-compose.yml`, `Caddyfile`) — Caddy (`:80`) → frontend + backend,
+plus Postgres and an `uploads` volume. Caddy routes `/api/*` to the backend.
 
 ## How to run locally
 
@@ -79,6 +89,19 @@ docker compose run --rm backend alembic upgrade head
 This applies any pending migrations. On a fresh database it creates the `alembic_version`
 tracking table and applies the empty baseline. `docker compose down` keeps your data (named
 volume `pgdata`); `docker compose down -v` **deletes** it — only do that to reset.
+
+**Seed demo data** (fake data only — never real patient data on a dev machine):
+
+```bash
+docker compose run --rm backend python -m app.seed          # the admin staff row
+docker compose run --rm backend python -m app.seed_demo     # a full demo clinic
+docker compose run --rm backend python -m app.seed_demo --reset   # wipe first, then reseed
+```
+
+`seed_demo` **simulates the clinic's workflow forward in time** — each patient is walked through
+register → book → arrive → treat → bill → pay (→ follow up / send to lab) — so the data can never
+contain a state the app itself couldn't produce. It is deterministic, and a no-op without
+`--reset` once seeded.
 
 ### By hand (per-service dev)
 

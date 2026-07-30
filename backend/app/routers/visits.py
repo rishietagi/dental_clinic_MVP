@@ -26,10 +26,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.auth import get_current_staff, require_role
 from app.db import get_db
+from app.models.invoice import Invoice
+from app.models.patient import Patient
 from app.models.procedure_performed import ProcedurePerformed
 from app.models.staff_user import StaffUser
 from app.models.treatment import Treatment
@@ -38,6 +40,8 @@ from app.models.visit import Visit
 from app.schemas.visit import (
     ProcedureRead,
     TreatmentSummary,
+    UnbilledVisit,
+    UnbilledVisitsResponse,
     VisitCreate,
     VisitListResponse,
     VisitRead,
@@ -48,6 +52,7 @@ from app.services.visits import (
     TreatmentAlreadyClosed,
     TreatmentNotFound,
     TreatmentPatientMismatch,
+    close_appointment_for_visit,
     resolve_treatment,
 )
 
@@ -241,10 +246,80 @@ def create_visit(
         ),
     )
 
-    # The single commit: treatment, visit, procedures and audit rows together.
+    # Recording the sitting finishes the appointment (6.8) — in THIS transaction,
+    # so the clinical record and the calendar can never disagree. Skipped for
+    # walk-ins and for terminal statuses; audited only when it actually changed,
+    # so the trail shows a real state change rather than a no-op on every visit.
+    if close_appointment_for_visit(db, body.appointment_id):
+        record_audit(
+            db,
+            actor_id=staff.id,
+            action="status",
+            entity="appointment",
+            entity_id=body.appointment_id,
+            details=jsonable_encoder(
+                {"status": "done", "auto_closed_by_visit": True, "visit_id": visit.id}
+            ),
+        )
+
+    # The single commit: treatment, visit, procedures, appointment and audit rows.
     db.commit()
     db.refresh(visit)
     return _to_read(db, visit)
+
+
+@router.get("/unbilled", response_model=UnbilledVisitsResponse)
+def list_unbilled_visits(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> UnbilledVisitsResponse:
+    """Recorded visits that have no invoice yet — the "to bill" worklist (6.8).
+
+    Treatment that was carried out but never billed is revenue walking out of
+    the door, and until 6.8 **no screen in the app could show it**: billing was
+    reachable only by remembering to click through from the one visit you had
+    just recorded. The dev database had 9 of these sitting invisible.
+
+    Any active staff — billing is front-desk work (the 5.2 rule).
+
+    **Declared BEFORE `GET /{visit_id}`** or FastAPI parses "unbilled" as a visit
+    UUID and 422s. Same discipline as `/treatments/needs-follow-up` (4.8),
+    `/invoices/collections` (5.5) and `/lab-cases/dashboard` (6.6); a test pins it.
+    """
+    dentist = aliased(StaffUser)
+
+    # LEFT JOIN ... WHERE NULL: the visits with no matching invoice row.
+    base = (
+        select(Visit, Patient.name, Treatment.title, dentist.name)
+        .join(Patient, Visit.patient_id == Patient.id)
+        .join(Treatment, Visit.treatment_id == Treatment.id)
+        .outerjoin(dentist, Visit.dentist_id == dentist.id)
+        .outerjoin(Invoice, Invoice.visit_id == Visit.id)
+        .where(Invoice.id.is_(None))
+    )
+
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = db.execute(base.order_by(Visit.visit_date.desc()).limit(limit)).all()
+
+    items = [
+        UnbilledVisit(
+            id=visit.id,
+            patient_id=visit.patient_id,
+            patient_name=patient_name,
+            treatment_title=title,
+            visit_date=visit.visit_date,
+            dentist_name=dentist_name,
+            procedure_count=db.scalar(
+                select(func.count())
+                .select_from(ProcedurePerformed)
+                .where(ProcedurePerformed.visit_id == visit.id)
+            )
+            or 0,
+        )
+        for visit, patient_name, title, dentist_name in rows
+    ]
+    return UnbilledVisitsResponse(items=items, total=total)
 
 
 @router.get("", response_model=VisitListResponse)

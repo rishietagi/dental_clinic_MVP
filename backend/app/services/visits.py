@@ -27,7 +27,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.appointment import Appointment
 from app.models.treatment import Treatment
+from app.services.appointments import can_transition
 
 
 class TreatmentNotFound(Exception):
@@ -112,3 +114,56 @@ def _apply_status(treatment: Treatment, status: str) -> None:
     else:
         treatment.status = "in_progress"
         treatment.closed_at = None
+
+
+def close_appointment_for_visit(db: Session, appointment_id: UUID | None) -> bool:
+    """Mark the visit's appointment `done`. Returns True if it changed (6.8).
+
+    **Recording a visit IS the appointment finishing.** Before 6.8 the two were
+    separate actions and the second was reliably forgotten: every appointment in
+    the dev DB that had a visit was still sitting at `arrived`, so the day view
+    claimed patients were in the chair hours after they had gone home, and
+    "appointments completed" could never be trusted.
+
+    Deliberately quiet and forgiving, because this is a *side effect* of the
+    clinical write, not the thing the user asked for:
+
+    - **Walk-ins are skipped** (`appointment_id is None`) — nothing to close.
+    - **Terminal states are left alone, never resurrected.** `cancelled` and
+      `no_show` are terminal by design (3.5). A visit recorded against one is a
+      data-entry problem for a human to look at, not something to paper over.
+    - **A missing appointment is not an error** — the visit is still valid.
+
+    **`booked` closes too, not just `arrived`.** The 3.5 machine only permits
+    `arrived -> done`, and that stays true for the *manual* status endpoint —
+    check-in is a real step the front desk performs. But a clinic that is busy
+    treats the patient whether or not anyone clicked "arrived", and a recorded
+    visit is proof that both the arrival and the sitting happened. Refusing to
+    close here would leave exactly the stale `booked` rows this change exists to
+    eliminate. So the auto-close walks the machine to `done` through the
+    intermediate state rather than jumping the rails or bypassing it.
+
+    `flush()`, never `commit()`: this rides the visit's transaction, so the
+    appointment and the clinical record land together or not at all.
+    """
+    if appointment_id is None:
+        return False
+
+    appointment = db.get(Appointment, appointment_id)
+    if appointment is None:
+        return False
+
+    # Walk the state machine rather than assigning `done` directly, so the
+    # terminal states stay genuinely terminal and any future rule added to
+    # `_ALLOWED` is honoured here for free.
+    changed = False
+    for target in ("arrived", "done"):
+        if appointment.status == "done":
+            break
+        if can_transition(appointment.status, target):
+            appointment.status = target
+            changed = True
+
+    if changed:
+        db.flush()
+    return changed

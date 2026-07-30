@@ -32,6 +32,7 @@ from app.models.appointment import Appointment
 from app.models.clinic_settings import ClinicSettings
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
+from app.models.visit import Visit
 from app.schemas.appointment import (
     AppointmentCreate,
     AppointmentListItem,
@@ -149,20 +150,46 @@ def list_appointments(
     date_: date | None = Query(default=None, alias="date", description="A single day (YYYY-MM-DD)."),
     from_: date | None = Query(default=None, alias="from", description="Range start (inclusive)."),
     to: date | None = Query(default=None, description="Range end (inclusive)."),
+    patient_id: UUID | None = Query(
+        default=None, description="This patient's appointments (no date needed)."
+    ),
+    missing_visit: bool = Query(
+        default=False, description="Only 'done' appointments with no visit recorded."
+    ),
     db: Session = Depends(get_db),
     staff: StaffUser = Depends(get_current_staff),
 ) -> AppointmentListResponse:
-    """Appointments in a day OR a date range, ordered by start time.
+    """Appointments in a day, a date range, OR for one patient.
 
-    Two mutually exclusive forms — pass EXACTLY one:
+    Three forms — pass EXACTLY one of the first two, or `patient_id`:
     - `date=YYYY-MM-DD` → that single day (the day-view calendar).
     - `from=…&to=…` → the inclusive range from `from` 00:00 to `to` 23:59 (the
       week-view calendar).
+    - `patient_id=…` → **that patient's whole history, newest first (6.8)**, with
+      no date at all. The patient profile needs "when are they next in?" and
+      "when were they last here?", which neither date form can answer without the
+      caller already knowing the date.
 
-    These are query dates, not patient identifiers, so they're fine in the query
-    string.
+    `missing_visit=true` narrows to appointments marked `done` that have **no
+    visit recorded** — the dashboard's "nothing recorded" nudge. That state is
+    genuinely ambiguous (was the patient treated, or did the dentist forget to
+    write it up?), so it is surfaced rather than left to rot.
+
+    Dates and the patient's own id in the path-free query are fine here: a
+    `patient_id` on this endpoint is the *filter subject*, and the no-identifiers
+    rule is about leaking a patient's identity into a URL that names them — this
+    returns nothing a caller didn't already have the id for.
     """
-    if date_ is not None:
+    by_patient = patient_id is not None
+
+    if by_patient:
+        if date_ is not None or from_ is not None or to is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Pass either `patient_id` or a date form, not both.",
+            )
+        range_start = range_end = None
+    elif date_ is not None:
         if from_ is not None or to is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -174,31 +201,48 @@ def list_appointments(
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Pass either `date` or both `from` and `to`.",
+            detail="Pass `date`, both `from` and `to`, or `patient_id`.",
         )
-
-    # "A day" is a CLINIC-local day, not a UTC day. Read the clinic timezone and
-    # bound the range in it (4.9). For an IST clinic, 2 Aug means 2 Aug 00:00 IST
-    # → 2 Aug 23:59 IST, i.e. 1 Aug 18:30 UTC → 2 Aug 18:29 UTC — so evening IST
-    # appointments (previous UTC day) are correctly included.
-    tz_name = _clinic_timezone(db)
-    day_start, _ = clinic_day_bounds(range_start, tz_name)
-    _, day_end = clinic_day_bounds(range_end, tz_name)
 
     # Join the patient (always present), the primary dentist, and the consulting
     # dentist (both nullable → outerjoins, the consulting one via an ALIAS since we
     # join staff_user twice) so each row carries the names the calendar needs — one
     # query, no N+1.
     consulting = aliased(StaffUser)
-    rows = db.execute(
+    stmt = (
         select(Appointment, Patient.name, StaffUser.name, consulting.name)
         .join(Patient, Appointment.patient_id == Patient.id)
         .outerjoin(StaffUser, Appointment.dentist_id == StaffUser.id)
         .outerjoin(consulting, Appointment.consulting_dentist_id == consulting.id)
-        .where(Appointment.start_time >= day_start)
-        .where(Appointment.start_time <= day_end)
-        .order_by(Appointment.start_time)
-    ).all()
+    )
+
+    if by_patient:
+        # Newest first: "when are they next in / when were they last here" reads
+        # better most-recent-down than in calendar order.
+        stmt = stmt.where(Appointment.patient_id == patient_id).order_by(
+            Appointment.start_time.desc()
+        )
+    else:
+        # "A day" is a CLINIC-local day, not a UTC day. Read the clinic timezone
+        # and bound the range in it (4.9). For an IST clinic, 2 Aug means 2 Aug
+        # 00:00 IST → 2 Aug 23:59 IST, i.e. 1 Aug 18:30 UTC → 2 Aug 18:29 UTC — so
+        # evening IST appointments (previous UTC day) are correctly included.
+        tz_name = _clinic_timezone(db)
+        day_start, _ = clinic_day_bounds(range_start, tz_name)
+        _, day_end = clinic_day_bounds(range_end, tz_name)
+        stmt = (
+            stmt.where(Appointment.start_time >= day_start)
+            .where(Appointment.start_time <= day_end)
+            .order_by(Appointment.start_time)
+        )
+
+    if missing_visit:
+        # Finished, but nothing was written up. LEFT JOIN ... WHERE NULL.
+        stmt = stmt.outerjoin(Visit, Visit.appointment_id == Appointment.id).where(
+            Appointment.status == "done", Visit.id.is_(None)
+        )
+
+    rows = db.execute(stmt).all()
 
     items = [
         AppointmentListItem(

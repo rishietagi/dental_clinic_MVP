@@ -6,6 +6,7 @@ import { LabDashboardCard } from "./lab-dashboard";
 import { NeedsFollowUp } from "./needs-follow-up";
 import { TodayDashboard } from "./today-dashboard";
 import { TodaysCollections } from "./todays-collections";
+import { NothingRecordedCard, ToBillCard } from "./worklists";
 import { PageHeader } from "@/components/page-header";
 
 // The dashboard — the app's home screen. The app shell (components/app-shell.tsx)
@@ -42,6 +43,11 @@ export default function Home() {
       {/* Operational view first: today's schedule, then who needs a follow-up,
           then today's takings. */}
       <TodayDashboard />
+
+      {/* Work the clinic still owes someone (6.8). Each hides itself when clear,
+          so an up-to-date day shows none of them. Billing first: it's money. */}
+      <ToBillCard />
+      <NothingRecordedCard />
 
       {/* Lab work needing attention — hides itself when there's nothing due. */}
       <LabDashboardCard />

@@ -55,12 +55,22 @@ export function InvoiceView({ invoiceId }: { invoiceId: string }) {
 }
 
 function Loaded({ invoice, refetch }: { invoice: Invoice; refetch: () => void }) {
-  const [amount, setAmount] = useState("");
+  // Pre-filled with what is actually due (6.8): paying the balance in full is
+  // the overwhelmingly common case, so it should take zero typing — and a
+  // pre-filled correct number is the best defence against a typo.
+  const [amount, setAmount] = useState(invoice.outstanding);
   const [mode, setMode] = useState<(typeof MODES)[number]>("cash");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const settled = invoice.status === "paid";
+
+  // Compare in paise-as-number only for the WARNING (never for money that gets
+  // stored — amounts stay decimal strings end to end, the 4.1 rule).
+  const typed = Number(amount);
+  const due = Number(invoice.outstanding);
+  const overpaying = !Number.isNaN(typed) && typed > due;
+  const overBy = overpaying ? (typed - due).toFixed(2) : "0.00";
 
   async function pay(e: React.FormEvent) {
     e.preventDefault();
@@ -83,14 +93,26 @@ function Loaded({ invoice, refetch }: { invoice: Invoice; refetch: () => void })
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Invoice</h1>
-        <Link
-          href={`/invoices/${invoice.id}/receipt`}
-          className={buttonVariants({ variant: "outline", size: "sm" })}
-        >
-          Print receipt
-        </Link>
+        {/* Both exits (6.8). The receipt was previously the ONLY way off this
+            screen, so after taking a payment the natural next move — back to the
+            person you are standing in front of — meant using the browser's back
+            button. */}
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/patients/${invoice.patient_id}`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Back to patient
+          </Link>
+          <Link
+            href={`/invoices/${invoice.id}/receipt`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Print receipt
+          </Link>
+        </div>
       </div>
 
       <Card>
@@ -152,34 +174,53 @@ function Loaded({ invoice, refetch }: { invoice: Invoice; refetch: () => void })
           {settled ? (
             <p className="text-sm text-emerald-600">This invoice is fully paid.</p>
           ) : (
-            <form onSubmit={pay} className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Amount</label>
-                <Input
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  className="w-32"
-                />
+            <form onSubmit={pay} className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">
+                    Amount{" "}
+                    <span className="text-muted-foreground/70">
+                      (due {formatMoney(invoice.outstanding)})
+                    </span>
+                  </label>
+                  <Input
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    className="w-32"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Mode</label>
+                  <select
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value as (typeof MODES)[number])}
+                    className={`${controlClass} w-28`}
+                  >
+                    {MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {m.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Saving…" : "Record payment"}
+                </Button>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Mode</label>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as (typeof MODES)[number])}
-                  className={`${controlClass} w-28`}
-                >
-                  {MODES.map((m) => (
-                    <option key={m} value={m}>
-                      {m.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button type="submit" disabled={busy}>
-                {busy ? "Saving…" : "Record payment"}
-              </Button>
+
+              {/* Overpayment is ALLOWED on purpose (5.3 — advances and cash
+                  rounding are real), but it was completely silent, so a typo
+                  became a wrong receipt with nothing to catch it. Warn, don't
+                  block. */}
+              {overpaying && (
+                <p className="text-sm text-warning">
+                  That is {formatMoney(String(overBy))} more than the{" "}
+                  {formatMoney(invoice.outstanding)} due. It will be recorded as
+                  an overpayment.
+                </p>
+              )}
             </form>
           )}
 

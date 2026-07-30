@@ -174,3 +174,25 @@ class VisitListResponse(BaseModel):
 
     items: list[VisitRead]
     total: int
+
+
+class UnbilledVisit(BaseModel):
+    """One row of the "to bill" worklist (6.8).
+
+    A deliberately flat, lean shape — the dashboard card needs a name, what was
+    done and when, and a link. Returning full `VisitRead` objects would mean
+    shipping clinical notes to a billing list that has no use for them.
+    """
+
+    id: UUID
+    patient_id: UUID
+    patient_name: str
+    treatment_title: str
+    visit_date: datetime
+    dentist_name: str | None = None
+    procedure_count: int
+
+
+class UnbilledVisitsResponse(BaseModel):
+    items: list[UnbilledVisit]
+    total: int

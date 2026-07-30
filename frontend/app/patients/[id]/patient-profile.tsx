@@ -1,25 +1,41 @@
 "use client";
 
-// Patient profile — Overview (demographics + medical-notes banner), a "Record
-// visit" action (4.4), and the Treatments section (4.5 close/reopen + 4.7 nested
-// visits).
+// Patient profile — a header of the facts + actions a receptionist needs, then
+// TABS: Treatments · Billing · Appointments · Files (6.8).
 //
 // The clinical model threads visits under a treatment (BUILD_PLAN §3), so the
-// profile shows exactly that: one Treatments section, each treatment expandable
-// to its own sittings. There is no separate flat visit-history card any more —
-// it was merged in here so a visit shows once, under the thread it belongs to.
-// Demographics remain read-only.
+// Treatments tab shows exactly that: each treatment expandable to its own
+// sittings. There is no separate flat visit-history card — a visit shows once,
+// under the thread it belongs to. Demographics remain read-only.
+//
+// **Why tabs (6.8):** this was one long scrolling column whose only outbound
+// link was back to the patient list. Billing lived nowhere, the balance owed
+// existed nowhere, and booking meant a trip to the calendar. The profile is the
+// screen staff live on, so it now answers "what do they owe / when are they next
+// in / what do I do now" without leaving it.
 
 import { useState } from "react";
 import Link from "next/link";
 
-import { MedicalNotesBanner } from "@/components/medical-notes-banner";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCurrentStaff } from "@/lib/use-current-staff";
-import { statusLabel, useVisitInvoice } from "@/lib/use-invoices";
+import { statusLabel, useInvoiceList, useVisitInvoice } from "@/lib/use-invoices";
 import { usePatient } from "@/lib/use-patient";
+import { usePatientAppointments } from "@/lib/use-day-appointments";
+import {
+  statusLabel as appointmentStatusLabel,
+  statusStyle as appointmentStatusStyle,
+} from "@/lib/appointment-status";
+import { PatientBillingSection } from "./patient-billing-section";
 import { PatientFilesSection } from "./patient-files-section";
+import { PatientHeader } from "./patient-header";
 import {
   closeTreatment,
   reopenTreatment,
@@ -38,6 +54,14 @@ export function PatientProfile({ patientId }: { patientId: string }) {
   // visits.
   const treatments = usePatientTreatments(patientId);
   const visits = usePatientVisits(patientId);
+  const appointments = usePatientAppointments(patientId);
+  // The header's balance. Summed from this patient's invoices (the ?patient_id=
+  // filter that 6.8 made real) rather than a stored total, which would drift.
+  const bills = useInvoiceList(undefined, patientId);
+  const outstanding =
+    bills.kind === "ready"
+      ? String(bills.items.reduce((n, i) => n + Number(i.outstanding), 0))
+      : "0";
 
   const canManage =
     staffState.kind === "staff" &&
@@ -66,67 +90,139 @@ export function PatientProfile({ patientId }: { patientId: string }) {
 
   const p = state.patient;
 
+  // Header facts, derived from data the tabs already load — no extra endpoint,
+  // and they cannot disagree with the lists underneath.
+  const appts = appointments.kind === "ready" ? appointments.data.items : [];
+  const lastVisit =
+    visits.kind === "ready" && visits.data.items.length
+      ? visits.data.items[0].visit_date
+      : null;
+
   return (
     <div className="flex flex-col gap-6">
       <BackLink />
 
-      <MedicalNotesBanner notes={p.medical_notes} />
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {p.name}
-            {p.archived && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
-                archived
-              </span>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            <Field label="Phone" value={p.phone} />
-            <Field label="Age" value={p.age !== null ? `${p.age}` : null} />
-            <Field label="Date of birth" value={p.date_of_birth} />
-            <Field label="Gender" value={p.gender} />
-          </dl>
-        </CardContent>
-      </Card>
-
-      {/* Dentist-only, and hidden for an archived patient — recording a visit
-          against someone archived is almost certainly a mistake. The API is the
-          real guard either way. */}
-      {canManage && !p.archived && (
-        <div>
-          {/* Styled as a button but rendered as a real link (this Button is
-              Base UI, which has no `asChild`; buttonVariants gives the look
-              without nesting interactive elements). */}
-          <Link
-            href={`/patients/${patientId}/visits/new`}
-            className={buttonVariants()}
-          >
-            Record visit
-          </Link>
-        </div>
-      )}
-
-      <TreatmentsSection
-        treatmentsState={treatments}
-        visitsState={visits}
+      <PatientHeader
+        patient={p}
         canManage={canManage}
-        onChanged={() => {
-          treatments.refetch();
-          visits.refetch();
-        }}
+        appointments={appts}
+        outstanding={outstanding}
+        lastVisit={lastVisit}
       />
 
-      {/* Files & X-rays. Reads for any staff; upload/archive gated to
-          dentist/admin (and the upload form is hidden for archived patients —
-          the API refuses it either way). */}
-      <PatientFilesSection
-        patientId={patientId}
-        canManage={canManage && !p.archived}
-      />
+      <Tabs defaultValue="treatments">
+        <TabsList>
+          <TabsTrigger value="treatments">Treatments</TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
+          <TabsTrigger value="appointments">Appointments</TabsTrigger>
+          <TabsTrigger value="files">Files</TabsTrigger>
+          <TabsTrigger value="details">Details</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="treatments">
+          <TreatmentsSection
+            treatmentsState={treatments}
+            visitsState={visits}
+            canManage={canManage}
+            onChanged={() => {
+              treatments.refetch();
+              visits.refetch();
+            }}
+          />
+        </TabsContent>
+
+        <TabsContent value="billing">
+          <PatientBillingSection patientId={patientId} />
+        </TabsContent>
+
+        <TabsContent value="appointments">
+          <AppointmentsSection state={appointments} />
+        </TabsContent>
+
+        <TabsContent value="files">
+          {/* Reads for any staff; upload/archive gated to dentist/admin (and the
+              upload form is hidden for archived patients — the API refuses it
+              either way). */}
+          <PatientFilesSection
+            patientId={patientId}
+            canManage={canManage && !p.archived}
+          />
+        </TabsContent>
+
+        <TabsContent value="details">
+          <Card>
+            <CardContent className="pt-6">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                <Field label="Phone" value={p.phone} />
+                <Field label="Age" value={p.age !== null ? `${p.age}` : null} />
+                <Field label="Date of birth" value={p.date_of_birth} />
+                <Field label="Gender" value={p.gender} />
+                <Field label="Medical notes" value={p.medical_notes} />
+              </dl>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// The Appointments tab (6.8): this patient's whole history, newest first, so
+// "when were they last here / when are they next in" is answerable without
+// hunting through the calendar.
+function AppointmentsSection({
+  state,
+}: {
+  state: ReturnType<typeof usePatientAppointments>;
+}) {
+  if (state.kind === "loading") {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+  if (state.kind === "error") {
+    return (
+      <p className="text-sm text-destructive">
+        Couldn’t load appointments: {state.message}
+      </p>
+    );
+  }
+  if (state.data.items.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No appointments yet. Use “Book appointment” above.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full text-sm">
+        <thead className="border-b bg-muted/50 text-left text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">When</th>
+            <th className="px-3 py-2 font-medium">Reason</th>
+            <th className="px-3 py-2 font-medium">Dentist</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {state.data.items.map((a) => (
+            <tr key={a.id} className="border-b last:border-0">
+              <td className="px-3 py-2">{formatVisitDate(a.start_time)}</td>
+              <td className="px-3 py-2 text-muted-foreground">{a.reason ?? "—"}</td>
+              <td className="px-3 py-2 text-muted-foreground">
+                {a.dentist_name ?? "—"}
+              </td>
+              <td className="px-3 py-2">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-xs ${appointmentStatusStyle(a.status)}`}
+                >
+                  {appointmentStatusLabel(a.status)}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

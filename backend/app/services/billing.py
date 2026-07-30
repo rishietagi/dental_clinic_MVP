@@ -197,6 +197,41 @@ def invoice_balances(db: Session, invoice: Invoice) -> tuple[Decimal, Decimal]:
     return paid, outstanding.quantize(_CENTS)
 
 
+def patient_balance(db: Session, patient_id: UUID) -> dict:
+    """What this patient has been billed, has paid, and still owes (6.8).
+
+    Powers the patient profile's Billing tab and its header figure. Aggregated
+    from the existing invoices + payments — **no new column and no running
+    total stored on the patient**, because a denormalised balance is exactly the
+    kind of field that drifts out of step with the rows it summarises.
+
+    `outstanding` sums the per-invoice outstanding (each already floored at 0 by
+    `invoice_balances`) rather than `billed - paid`: otherwise an overpayment on
+    one bill would silently cancel out a genuine debt on another and the patient
+    would look settled when they are not.
+    """
+    invoices = list(db.scalars(select(Invoice).where(Invoice.patient_id == patient_id)))
+
+    billed = sum((inv.total for inv in invoices), Decimal("0"))
+    paid = Decimal("0")
+    outstanding = Decimal("0")
+    unpaid_count = 0
+    for inv in invoices:
+        inv_paid, inv_outstanding = invoice_balances(db, inv)
+        paid += inv_paid
+        outstanding += inv_outstanding
+        if inv_outstanding > 0:
+            unpaid_count += 1
+
+    return {
+        "total_billed": billed.quantize(_CENTS),
+        "total_paid": paid.quantize(_CENTS),
+        "outstanding": outstanding.quantize(_CENTS),
+        "unpaid_count": unpaid_count,
+        "invoice_count": len(invoices),
+    }
+
+
 def get_invoice_by_visit(db: Session, visit_id: UUID) -> Invoice | None:
     """The invoice for a visit, or None if it hasn't been generated yet.
 

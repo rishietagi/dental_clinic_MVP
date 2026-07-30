@@ -18,7 +18,7 @@ full plan and roadmap), then this file (what actually happened).
 **Where we are: Phases 0–5 COMPLETE (+ the 5.6 uploads interlude). PHASE 6 IN PROGRESS —
 6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo/invoices-ledger/routing/UI-library ·
 6.5 manage dentists + by-dentist analytics · 6.6 Lab Management · 6.7 Pricing (treatments/medicine/
-consultation fees) — all DONE.
+consultation fees) · 6.8 workflow correctness + navigation · 6.9 reseed by simulation + E2E — all DONE.
 Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
 
 > **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
@@ -79,11 +79,19 @@ After changing deps or a migration, **rebuild the image** (`docker compose build
   `payment`, `patient_file`, **`lab`**, **`lab_case`**.
 - **Nine `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`, **`lab`**.
-- **284 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
-  **`app.seed_demo`** (full demo dataset incl. lab cases, medicines + dentist fees),
-  `app.seed_labs_topup` and **`app.seed_pricing_topup`** (one-offs that add only the 6.6 lab / 6.7
-  pricing demo rows to a DB seeded earlier — `seed_demo` is marker-guarded; delete these once
-  they've served their purpose).
+- **303 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
+  **`app.seed_demo`** — rewritten in 6.9 to **simulate the workflow forward** (a `Clinic` harness
+  performing the same actions staff perform, in order, applying the same rules incl. the 6.8
+  auto-close), so the demo data cannot contain states the app can't produce. Run
+  `python -m app.seed_demo --reset` to wipe + reseed; marker-guarded without `--reset`.
+  *(The one-off `seed_labs_topup` / `seed_pricing_topup` scripts were deleted in 6.9.)*
+- **Workflow rules added in 6.8** (all no-migration): recording a visit **auto-closes its
+  appointment** (`services/visits.close_appointment_for_visit`, walks the 3.5 machine, skips
+  walk-ins + terminal states, **`booked` closes too** but the manual endpoint stays strict);
+  **`?patient_id=` now really filters** `/invoices` **and** `/appointments` (it was silently
+  dropped before — tests assert it NARROWS); **`GET /visits/unbilled`** and
+  **`/appointments?missing_visit=true`** power the dashboard worklists;
+  **`billing.patient_balance()`** sums per-invoice outstanding so an overpayment can't mask a debt.
 - **The catalogue has KINDS now** (6.7): `treatment_item.kind` is `treatment` | `medicine`, and the
   unique is composite **`(kind, name)`** — not bare `name`. The **consultation fee is NOT a kind**:
   it's `staff_user.consultation_fee` (nullable = "not set", ≠ 0.00), reaching invoices as a **custom
@@ -366,6 +374,9 @@ the original step instructions say otherwise:
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
 | **Lab work: the appointment CLOSES, the lab case tracks the wait (6.6)** | "should the appointment stay open / get a 'waiting on lab' status?" | **No new appointment status.** When a sample goes out the appointment still finishes `done` — that sitting happened, and an appointment is a **calendar slot**, so holding it open for days would make the calendar claim the dentist is busy on a past day; `done`/`cancelled` are also terminal by design and the slot-freeing rules depend on it. The wait lives on `lab_case` (`sent → received`, + `cancelled`), while the **treatment** stays `in_progress` so the patient still appears on the follow-up report. **Don't add a `waiting_on_lab` status** — it was considered and deliberately rejected. Lifecycle is only two working states (user's call, for simplicity); because there's no "fitted" state, **`lab_case.follow_up_done`** is a dismiss flag powering the dashboard's "Back from lab — call the patient in" list, so a returned crown can't sit in a drawer. Lab work is **any-active-staff** (front-desk), not dentist-gated. | `backend/app/models/lab_case.py`, `backend/app/services/lab.py` |
+| **Recording a visit CLOSES its appointment (6.8)** | 3.5 made status a manual, explicit action | Recording the sitting *is* the appointment finishing, so `POST /visits` transitions the appointment to `done` **in the same transaction**. Before this the two were separate and the second was reliably forgotten — every appointment in the dev DB that had a visit was still `arrived`, so the day view claimed patients were in the chair hours after they left. It **walks the `can_transition` machine** rather than assigning the column: `cancelled`/`no_show` stay terminal (a visit against one is a human data-entry problem, not something to paper over) and walk-ins are skipped. **`booked` closes too** — a busy clinic treats without clicking "arrived" — but that relaxation is confined to the auto-close: `POST /appointments/{id}/status` still refuses booked→done (409), pinned by `test_manual_status_endpoint_stays_strict`. | `backend/app/services/visits.py`, `backend/tests/test_workflow.py` |
+| **An undeclared query param is silently DROPPED — assert filters NARROW (6.8)** | — | `GET /invoices?patient_id=` looked like it worked and returned **every invoice in the clinic**, because the param was never declared and FastAPI discards unknown ones. A "patient balance" screen built on it would have shown one patient another's money. Two lessons kept: declare every filter the UI passes, and **test that a filter EXCLUDES the other rows** — a "returns 200" assertion passes against exactly this bug. `patient_id` is now real on `/invoices` and is a third, date-free mode on `/appointments`. | `backend/app/routers/invoices.py`, `backend/app/routers/appointments.py` |
+| **Demo data is SIMULATED forward, not inserted table-by-table (6.9)** | seed scripts filled each table in turn | The old seed produced states the app cannot: appointments `done` with no visit, visits whose appointment was still `arrived`, 31 patients with no history. `seed_demo.py` now runs a `Clinic` harness that performs the same actions staff perform, in chronological order, applying the same rules (including the 6.8 auto-close and the 5.2/5.3 billing rules). **If a state is reachable in the seed it is reachable in the app**, which makes the seed a rough end-to-end test of the domain as well as demo content. Deterministic RNG; `--reset` wipes first. **The GiST no-overlap constraint rejected the first run** (two appointments, one dentist, one slot) — reassuring, and `book()` now walks forward to a free slot like a receptionist would. | `backend/app/seed_demo.py` |
 | **Pricing has TWO mechanisms: medicine is a catalogue `kind`, the consultation fee is per-dentist (6.7)** | `treatment_item` = "the treatment catalogue", one flat priced list | The clinic charges for three things. **Medicine** is a `kind` on `treatment_item` (`treatment`\|`medicine`) so it rides the existing `treatment_item → procedure_performed → invoice_line` pipeline unchanged — 5.2 price snapshot and procedure-mix reporting come free. **The consultation fee is deliberately NOT a kind**: it is per-dentist (`staff_user.consultation_fee`), so it has no catalogue row, cannot be a `procedure_performed` (that FK points at `treatment_item`), and reaches an invoice as an **`extra_lines` custom line** — carried from the visit screen as `?consult=<amount>\|<dentist name>` (a dentist's name is not patient PII, so the no-identifiers-in-URLs rule holds). The fee is **nullable = "not set", which is NOT 0.00**, and is **offered with an Add button, never auto-added** — auto-adding would silently re-bill a consultation on every follow-up sitting. **`kind` is absent from PATCH**: re-kinding a live item would move already-billed revenue between report buckets. The unique became composite **`(kind, name)`**, and `routers/treatment_items.py` had to stop matching the dropped `ix_treatment_item_name` string or duplicates would 500 instead of 409. | `backend/app/models/treatment_item.py`, `backend/app/models/staff_user.py`, `frontend/app/settings/treatments/` |
 | **Human-readable ids: `A-1042` / `L-1042` via sequences (6.6)** | everything was a raw UUID | The app had **no readable ids** — unusable when the receptionist must quote a case to a lab on the phone. `appointment.number` + `lab_case.number` are Integers fed by **Postgres sequences** (start 1001); the `A-`/`L-` prefixes are **display-only** (not stored). The migration added `appointment.number` **nullable → backfilled → NOT NULL** (adding NOT NULL to a populated table fails), then `setval` past the max, and `ALTER SEQUENCE ... OWNED BY` so downgrade drops the sequences. **Critical gotcha:** the model column MUST carry `server_default=text("nextval('...')")` — without it SQLAlchemy sends an explicit NULL and every insert fails (this bit, and would have broken appointment booking too). | `backend/alembic/versions/6b93975ddf46_*.py`, `backend/app/models/lab_case.py` |
 | **Dentists are name-only records, not logins — shared-login model (6.5)** | staff_user.id = Supabase UUID; "add dentist" sounds like "create login" | The clinic runs the app under a **single shared receptionist login**; dentists don't each sign in. So `POST /staff` creates a `staff_user` row with a **random local UUID** (name + email as info, role dentist) purely to **assign** on appointments/visits and **attribute** in reports — **no Supabase Auth call, no migration**. This is the exception to "staff_user.id IS the Supabase Auth UUID" (true for the seeded admin who does log in). Soft **deactivate** (never delete — history resolves), admin-only writes. If a dentist ever needs to actually log in, that's a separate Supabase step (out of scope). **Reports break down by dentist** via the visit's primary `dentist_id` (`?dentist_id=` filter + a `by_dentist` block). | `backend/app/routers/staff.py`, `backend/app/services/reports.py` |
@@ -390,6 +401,91 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-30 — Steps 6.8 + 6.9: workflow correctness, then a real clinic dataset
+
+**Status:** both complete. **303 backend tests pass** (+19); lint + build green; **32/32 E2E
+verification checks pass**; demo data wiped and reseeded by simulation (46 patients); stack up.
+**No migration.** For commit (two commits suggested below).
+
+### Why — the walkthrough that started it
+Before building anything I **drove the real API through the actual clinic journeys** (register →
+book → arrive → treat → bill → pay, plus follow-ups, walk-ins, and ambiguity probes) and queried
+the live DB. Eight findings, all measured rather than guessed:
+
+| # | Finding | Evidence at the time |
+|---|---|---|
+| 1 | **A recorded visit did not close its appointment** — it stayed `arrived` forever, so the calendar claimed patients were still in the chair | 4 appointments had a visit but weren't `done` |
+| 2 | **`GET /invoices?patient_id=` was silently ignored** — undeclared param, so FastAPI dropped it and returned **every invoice in the clinic** | asked for 1 patient's, got all 19 |
+| 3 | **Nothing listed unbilled visits** — treated work with no invoice was invisible | 9 unbilled visits, no screen |
+| 4 | **No patient → appointments filter** (`?patient_id=` → 422), so the profile couldn't show "next appointment" | probe |
+| 5 | **Overpayment was silent** — ₹11,545 accepted on a ₹6,545 bill | probe |
+| 6 | **`done` with no visit was ambiguous** — treated, or write-up forgotten? | 10 such rows |
+| 7 | **Dead-end navigation** — profile linked only back to `/patients`; the invoice screen's only exit was the receipt | link-graph audit |
+| 8 | 31 of 63 patients were empty shells | query |
+
+### 6.8 — the fixes (all confirmed with the user)
+- **Auto-close (finding 1).** `close_appointment_for_visit` in `services/visits.py`, called inside
+  the visit's transaction so the clinical record and the calendar can never disagree. **Walks the
+  3.5 state machine** rather than assigning `done`: `cancelled`/`no_show` are left alone (terminal
+  by design), walk-ins skipped. **`booked` closes too** — a busy clinic treats without clicking
+  "arrived", and the visit is proof both happened; **the manual status endpoint stays strict**
+  (booked→done by hand is still 409), pinned by a test.
+- **The filter bug (2, 4).** `patient_id` declared and actually applied on `/invoices`, and added
+  to `/appointments` as a **third orthogonal mode** (no date required). *A silently-dropped filter
+  is worse than a 422* — so the tests assert each filter **NARROWS** the result (the other
+  patient's rows are absent), because the broken version passed a "returns 200" check.
+- **`GET /visits/unbilled` (3)** — LEFT JOIN invoice WHERE NULL, lean row shape, declared before
+  `/{visit_id}` (the literal-before-`{id}` trap). **`?missing_visit=true`** on `/appointments` (6).
+- **`patient_balance()`** in `services/billing.py` — sums **per-invoice outstanding** (each floored
+  at 0), NOT billed-minus-paid, so an overpayment on one bill can't mask a real debt on another.
+- **Frontend:** dashboard **"Ready to bill"** + **"Nothing recorded"** cards (hide when empty);
+  the patient profile restructured into a **header** (outstanding · next appointment · last visit
+  + Book/Record actions) over **tabs** (Treatments · Billing · Appointments · Files · Details);
+  a **Billing tab** using the now-real filter; **"Back to patient"** beside Print receipt; the
+  payment box **pre-filled with the amount due** plus an **inline overpayment warning** (warn,
+  still allow — 5.3's overpayment behaviour is deliberate, it was only ever *silent* that was wrong).
+
+### 6.9 — the reseed, by simulation
+`seed_demo.py` rewritten to **simulate the workflow forward in time** instead of inserting
+table-by-table. That is the whole point: the old seed produced exactly the contradictions above
+(done-with-no-visit, treated-but-still-arrived, empty patients) because each table was filled
+independently. Now a `Clinic` harness performs the same actions staff perform, in order, applying
+the same rules — including the 6.8 auto-close — so **if a state is reachable in the seed, it is
+reachable in the app**. Deterministic (fixed RNG), `--reset` wipes first, marker-guarded.
+
+**46 patients / 59 appointments / 45 visits / 41 invoices / 35 payments / 6 lab cases**, covering:
+12 completed-and-paid single visits · 8 multi-sitting RCT/crown cases mid-treatment with the next
+sitting booked · 4 open treatments with **no** follow-up (the 4.8 report) · 3 unbilled visits (the
+new card) · lab cases at every stage incl. cancelled · 2 walk-ins · no-shows/cancellations · an
+archived patient · medical-notes banners · X-rays · and a **live "today"** so the dashboard is
+alive on open. `seed_labs_topup.py` + `seed_pricing_topup.py` deleted (their job is now in the base seed).
+
+### Two things the work caught (worth remembering)
+- **The GiST no-overlap constraint rejected the seed** when two appointments landed on one dentist
+  at one time. Reassuring — the 3.2 guarantee is real. `book()` now walks forward slot-by-slot to
+  find a free one, exactly as a receptionist would, instead of hand-picked times that break
+  whenever the data shifts.
+- **`test_day_bounds_use_clinic_timezone` asserted `total == 1`** on a fixed date and broke once
+  the seed legitimately put a follow-up there. Rewritten **delta-based** (the 6.4 lesson): a test
+  that only passes on an empty DB is fragile, and real patient data would break it too.
+
+### Verified
+303 tests; migration head unchanged; lint + build green; **a 32-check E2E script re-proved all 8
+findings fixed** and confirmed data consistency (no orphan visits/invoices, `invoice.status`
+agrees with payments, no empty-shell patients) and that **every screen has content**.
+
+### What was NOT verified by me (honest note)
+Every API path and rule above is test- or script-proven, and the UI builds/renders. **The browser
+click-through is the user's** (real auth): the dashboard's two new cards → "Create bill" → take
+payment (watch the prefill + overpayment warning) → receipt → Back to patient; the patient profile
+header + its five tabs; and a visit recorded from the calendar closing its appointment on the day view.
+
+### Suggested commits
+6.8: `fix: close appointments on visit, fix patient filters, add billing worklists`
+6.9: `chore: reseed demo data by simulating the clinic workflow`
 
 ---
 

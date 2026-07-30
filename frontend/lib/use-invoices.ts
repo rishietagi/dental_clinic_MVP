@@ -176,7 +176,13 @@ type InvoiceListState =
   | { kind: "ready"; items: InvoiceListItem[]; total: number }
   | { kind: "error"; message: string };
 
-export function useInvoiceList(statusFilter?: string): InvoiceListState & { refetch: () => void } {
+// The invoices ledger. `patientId` narrows it to one patient (6.8) for the
+// profile's Billing tab — the API silently ignored that param until 6.8 and
+// returned every invoice in the clinic, so do not assume an older backend.
+export function useInvoiceList(
+  statusFilter?: string,
+  patientId?: string,
+): InvoiceListState & { refetch: () => void } {
   const [state, setState] = useState<InvoiceListState>(
     apiUrl ? { kind: "loading" } : { kind: "error", message: "NEXT_PUBLIC_API_URL is not set." },
   );
@@ -195,6 +201,7 @@ export function useInvoiceList(statusFilter?: string): InvoiceListState & { refe
 
         const url = new URL(`${apiUrl}/invoices`);
         if (statusFilter) url.searchParams.set("status", statusFilter);
+        if (patientId) url.searchParams.set("patient_id", patientId);
 
         const res = await fetch(url, { headers });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
@@ -212,7 +219,7 @@ export function useInvoiceList(statusFilter?: string): InvoiceListState & { refe
     return () => {
       cancelled = true;
     };
-  }, [statusFilter, nonce]);
+  }, [statusFilter, patientId, nonce]);
 
   return { ...state, refetch };
 }

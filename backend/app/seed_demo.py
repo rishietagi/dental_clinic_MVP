@@ -1,30 +1,36 @@
-"""Seed a full, realistic demo dataset for local review (step 6.3).
+"""Seed a realistic demo clinic by SIMULATING the workflow forward (6.9).
 
-    docker compose run --rm backend python -m app.seed_demo
+    docker compose run --rm backend python -m app.seed_demo           # seed
+    docker compose run --rm backend python -m app.seed_demo --reset   # wipe first
 
-Populates EVERY screen with data so the app can be demoed and every feature seen
-with real content: a couple of dentists, a treatment catalogue, ~50 patients (via
-the existing patient seed), a spread of appointments (past/today/future across all
-statuses, some with a consulting dentist), visits with procedures (primary +
-consulting dentist), invoices with payments (paid / partially paid / unpaid), and a
-few uploaded-file placeholders.
+**Why a simulation rather than table-by-table inserts.** The previous seed filled
+each table independently, and the end-to-end walkthrough found exactly the
+inconsistencies that invites: appointments marked `done` with no visit, visits
+whose appointment was still `arrived`, and 31 patients with no history at all.
+Data assembled that way can contradict itself in ways real usage never would.
 
-Fake data only — never real patient data on a dev machine (Phase 7+). Idempotent:
-guarded on a demo marker in the audit log, so re-running does nothing. To reset,
-drop + re-create the DB (or delete the demo rows) and re-run.
+Here every patient is walked through the same journey the software enforces —
+register -> book -> arrive -> treat -> bill -> pay (-> follow up / send to lab) —
+in chronological order. If a state is reachable in this file, staff can reach it
+in the app, and vice versa. That makes the demo data a rough end-to-end test of
+the domain rules as well as something to look at.
 
-Note on dentists: these are `staff_user` rows for assignment/display. A real
-Supabase LOGIN for a dentist is a separate concern (Supabase Auth) and out of scope
-here — you sign in as the seeded admin; the demo dentists exist to be referenced by
-appointments/visits.
+Deterministic (fixed RNG seed), so re-seeding reproduces the same clinic.
+Idempotent via the audit-log marker; `--reset` clears prior demo data first.
+
+Fake data only — never real patient data on a dev machine (Phase 7+).
+
+Dentists here are `staff_user` rows for assignment and attribution, NOT logins:
+the clinic runs on one shared receptionist login (the 6.5 decision).
 """
 
 import random
-from datetime import datetime, timedelta, timezone
+import sys
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.db import SessionLocal
 from app.models.appointment import Appointment
@@ -42,324 +48,722 @@ from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
 from app.models.visit import Visit
 from app.services.audit import record_audit
-from app.seed_patients import generate_patients
 
-_DEMO_MARKER = "demo_v1"
+_DEMO_MARKER = "demo_v2"
 
-# The catalogue the invoices price from.
+# --- the clinic's price list -------------------------------------------------
+
 CATALOGUE = [
     ("Consultation", "300.00"),
     ("Scaling / cleaning", "1500.00"),
     ("Composite filling", "1200.00"),
     ("Root canal treatment", "6000.00"),
     ("Crown (PFM)", "4500.00"),
+    ("Crown (Zirconia)", "8000.00"),
     ("Extraction", "1000.00"),
+    ("Surgical extraction", "2500.00"),
     ("X-ray (IOPA)", "300.00"),
+    ("Denture (complete, per arch)", "12000.00"),
+    ("Teeth whitening", "7000.00"),
+    ("Fluoride application", "800.00"),
 ]
 
-# Medicines dispensed at the chair (6.7). Same table as CATALOGUE, kind='medicine'.
 MEDICINES = [
     ("Amoxicillin 500mg", "45.00"),
     ("Metronidazole 400mg", "35.00"),
     ("Ibuprofen 400mg", "25.00"),
     ("Paracetamol 650mg", "20.00"),
     ("Chlorhexidine mouthwash", "150.00"),
+    ("Lignocaine gel", "90.00"),
 ]
 
-# (name, email, consultation_fee) — the fee is per-dentist (6.7).
+# (name, email, consultation_fee)
 DENTISTS = [
     ("Dr. Meera Prabhu", "meera.demo@clinic.local", "500.00"),
     ("Dr. Anil Kamath", "anil.demo@clinic.local", "300.00"),
 ]
 
+LABS = [
+    ("Sri Dental Lab", "98800 11223", "Davangere"),
+    ("Precision Ceramics", "98800 44556", "Bengaluru"),
+]
+
+# --- patients: real-looking Karnataka names ----------------------------------
+
+FIRST_NAMES = [
+    "Sunita", "Ravi", "Lakshmi", "Manjunath", "Prakash", "Shobha", "Girish",
+    "Vidya", "Basavaraj", "Kavya", "Nagaraj", "Rekha", "Suresh", "Anitha",
+    "Mahesh", "Jyothi", "Shivakumar", "Deepa", "Ramesh", "Pushpa", "Vinay",
+    "Sharada", "Chandrashekar", "Bhavya", "Gopal", "Meena", "Santosh",
+    "Roopa", "Kiran", "Savitha", "Umesh", "Nandini", "Harish", "Geetha",
+    "Praveen", "Sushma", "Vasanth", "Latha",
+]
+SURNAMES = [
+    "Hegde", "Patil", "Gowda", "Shetty", "Rao", "Kulkarni", "Naik", "Desai",
+    "Bhat", "Reddy", "Murthy", "Jain", "Kamath", "Pai", "Nayak", "Joshi",
+]
+
+COMPLAINTS = [
+    "Pain in lower left back tooth",
+    "Sensitivity to cold",
+    "Bleeding gums while brushing",
+    "Food getting stuck between teeth",
+    "Broken filling",
+    "Swelling near the gum",
+    "Routine check-up",
+    "Discoloured front tooth",
+    "Difficulty chewing",
+    "Wisdom tooth pain",
+]
+
+MEDICAL_NOTES = [
+    "Type 2 diabetic — on metformin.",
+    "On blood thinners (aspirin). Confirm before extraction.",
+    "Allergic to penicillin.",
+    "Hypertensive, on medication.",
+    "Pregnant — 2nd trimester. Avoid X-rays.",
+    "Asthmatic; carries an inhaler.",
+]
+
+NOTES_BY_PROCEDURE = {
+    "Root canal treatment": [
+        "Access opening done. Working length measured. Temporary filling placed.",
+        "Cleaning and shaping completed. Calcium hydroxide dressing given.",
+        "Obturation done. Patient advised for crown.",
+    ],
+    "Scaling / cleaning": ["Full-mouth scaling and polishing done. Oral hygiene instructions given."],
+    "Composite filling": ["Caries excavated, composite restoration placed and polished."],
+    "Extraction": ["Tooth extracted under local anaesthesia. Haemostasis achieved. Post-op instructions given."],
+    "Crown (PFM)": ["Tooth prepared, impression taken, temporary crown cemented."],
+    "Crown (Zirconia)": ["Tooth prepared, digital impression taken. Shade matched."],
+    "Consultation": ["Examination done. Treatment options discussed with the patient."],
+}
+
+TEETH = ["11", "16", "21", "26", "31", "36", "37", "41", "46", "47"]
+
 _PNG = b"\x89PNG\r\n\x1a\n" + b"demo-xray-bytes" * 8
 
 
 def _already_seeded(db) -> bool:
-    count = db.scalar(
-        select(func.count()).select_from(AuditLog).where(AuditLog.action == "seed_demo")
+    return bool(
+        db.scalar(
+            select(func.count()).select_from(AuditLog).where(AuditLog.action == _DEMO_MARKER)
+        )
     )
-    return (count or 0) > 0
 
 
-def seed_demo() -> None:
-    rng = random.Random(7)
-    now = datetime.now(timezone.utc)
+def reset(db) -> None:
+    """Delete all clinical/demo data, child tables first.
 
-    with SessionLocal() as db:
-        if _already_seeded(db):
-            print("seed_demo: already seeded (marker present), skipping.")
-            return
+    Deliberately does NOT touch `staff_user` (the admin row is a real Supabase
+    login) or `clinic_settings` (a singleton pinned by a CHECK).
+    """
+    for model in (
+        Payment, InvoiceLine, Invoice, LabCase, PatientFile,
+        ProcedurePerformed, Visit, Appointment, Treatment, Patient,
+    ):
+        db.execute(delete(model))
+    db.execute(delete(Lab))
+    db.execute(delete(TreatmentItem))
+    db.execute(delete(AuditLog))
+    # Drop the name-only demo dentists; keep any real login rows.
+    for _, email, _fee in DENTISTS:
+        who = db.scalar(select(StaffUser).where(StaffUser.email == email))
+        if who is not None:
+            db.delete(who)
+    db.commit()
+    print("reset: cleared previous demo data")
 
-        # --- dentists (staff_user rows for assignment/display) ---
-        dentists = []
-        for name, email, fee in DENTISTS:
-            existing = db.scalar(select(StaffUser).where(StaffUser.email == email))
-            if existing is None:
-                d = StaffUser(
-                    id=uuid4(),
-                    name=name,
-                    email=email,
-                    roles=["dentist"],
-                    active=True,
-                    consultation_fee=Decimal(fee),
-                )
-                db.add(d)
-                dentists.append(d)
-            else:
-                dentists.append(existing)
-        db.flush()
 
-        # --- priced catalogue: treatments + medicines (6.7) ---
-        # `items` stays treatments-only: it feeds the procedure/invoice generation
-        # below, and a demo bill of nothing but antibiotics would be odd.
-        items = []
-        for name, price in CATALOGUE:
-            existing = db.scalar(
-                select(TreatmentItem).where(
-                    TreatmentItem.kind == "treatment", TreatmentItem.name == name
+class Clinic:
+    """A tiny harness that performs the clinic's actions in chronological order.
+
+    Each method is one thing a human does in the app, and applies the same rules
+    the API would — e.g. `treat()` closes the appointment, exactly as
+    `services.visits.close_appointment_for_visit` does for a real request.
+    """
+
+    def __init__(self, db, rng, dentists, items, meds, labs, actor):
+        self.db = db
+        self.rng = rng
+        self.dentists = dentists
+        self.items = {i.name: i for i in items}
+        self.meds = meds
+        self.labs = labs
+        self.actor = actor
+
+    # -- front desk ----------------------------------------------------------
+
+    def register(self, name, *, phone, dob=None, gender=None, notes=None, archived=False):
+        p = Patient(
+            name=name, phone=phone, date_of_birth=dob, gender=gender,
+            medical_notes=notes, archived=archived,
+        )
+        self.db.add(p)
+        self.db.flush()
+        return p
+
+    def book(self, patient, when, *, dentist=None, reason=None, treatment=None,
+             duration=30, status="booked", consulting=None):
+        """Book a slot, nudging later if that dentist is already busy.
+
+        The DB enforces no-overlap per dentist with a GiST EXCLUDE constraint
+        (3.2) — the real guarantee that survives two racing PCs. The seed is
+        subject to it like any other client, so rather than hand-pick every
+        time (brittle, and it silently breaks the moment the data changes) this
+        walks forward in slot-sized steps until it finds a free one. That is
+        also what a receptionist does.
+        """
+        who = dentist or self.dentists[0]
+        start = when
+        for _ in range(40):  # ~a full working day of slots
+            taken = self.db.scalar(
+                select(func.count())
+                .select_from(Appointment)
+                .where(
+                    Appointment.dentist_id == who.id,
+                    Appointment.status != "cancelled",
+                    Appointment.start_time < start + timedelta(minutes=duration),
+                    Appointment.start_time
+                    + func.make_interval(0, 0, 0, 0, 0, Appointment.duration_min)
+                    > start,
                 )
             )
-            if existing is None:
-                it = TreatmentItem(
-                    name=name, default_price=Decimal(price), kind="treatment"
-                )
-                db.add(it)
-                items.append(it)
-            else:
-                items.append(existing)
+            if not taken:
+                break
+            start += timedelta(minutes=duration)
 
-        for name, price in MEDICINES:
-            existing = db.scalar(
-                select(TreatmentItem).where(
-                    TreatmentItem.kind == "medicine", TreatmentItem.name == name
-                )
-            )
-            if existing is None:
-                db.add(
-                    TreatmentItem(
-                        name=name, default_price=Decimal(price), kind="medicine"
-                    )
-                )
-        db.flush()
+        appt = Appointment(
+            patient_id=patient.id,
+            dentist_id=who.id,
+            consulting_dentist_id=consulting.id if consulting else None,
+            treatment_id=treatment.id if treatment else None,
+            start_time=start,
+            duration_min=duration,
+            status=status,
+            reason=reason,
+        )
+        self.db.add(appt)
+        self.db.flush()
+        return appt
 
-        # --- patients (reuse the existing generator; add if the table is thin) ---
-        existing_patients = db.scalars(select(Patient)).all()
-        if len(existing_patients) < 30:
-            new_patients = generate_patients(count=50, seed=7)
-            db.add_all(new_patients)
-            db.flush()
-            patients = list(existing_patients) + new_patients
-        else:
-            patients = list(existing_patients)
+    # -- the surgery ---------------------------------------------------------
 
-        active_patients = [p for p in patients if not p.archived]
-
-        # --- appointments: past / today / future across statuses ---
-        statuses_past = ["done", "done", "done", "cancelled", "no_show"]
-        made_appts = 0
-        for offset_days, statuses in (
-            (-14, statuses_past),
-            (-7, statuses_past),
-            (0, ["arrived", "booked", "done"]),   # today
-            (3, ["booked", "booked"]),
-            (10, ["booked"]),
-        ):
-            base = now + timedelta(days=offset_days)
-            for i, st in enumerate(statuses):
-                patient = rng.choice(active_patients)
-                primary = rng.choice(dentists)
-                consulting = rng.choice(dentists) if rng.random() < 0.25 else None
-                # Space slots through the clinic day (10:00, 10:45, …) to avoid overlap.
-                start = base.replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(minutes=45 * i)
-                appt = Appointment(
-                    patient_id=patient.id,
-                    dentist_id=primary.id,
-                    consulting_dentist_id=consulting.id if consulting else None,
-                    start_time=start,
-                    duration_min=30,
-                    status=st,
-                    reason=rng.choice(["Toothache", "Check-up", "Cleaning", "Follow-up", None]),
-                )
-                db.add(appt)
-                made_appts += 1
-        db.flush()
-
-        # --- visits with procedures + invoices with payments (for ~12 patients) ---
-        made_visits = made_invoices = 0
-        for patient in rng.sample(active_patients, k=min(12, len(active_patients))):
-            primary = rng.choice(dentists)
-            consulting = rng.choice(dentists) if rng.random() < 0.3 else None
-
+    def treat(self, patient, *, when, procedures, appointment=None, treatment=None,
+              title=None, tooth=None, complete=True, dentist=None, consulting=None,
+              complaint=None, notes=None):
+        """Record a sitting. Creates/closes the treatment and CLOSES the
+        appointment, mirroring the 6.8 rule so the demo data can never contain
+        the "treated but still marked arrived" state the walkthrough found."""
+        if treatment is None:
             treatment = Treatment(
                 patient_id=patient.id,
-                title=rng.choice(["RCT tooth 36", "Scaling", "Crown tooth 11", "Filling tooth 24"]),
-                tooth_ref=rng.choice(["36", "11", "24", None]),
-                status="completed" if rng.random() < 0.5 else "in_progress",
+                title=title or procedures[0],
+                tooth_ref=tooth,
+                status="in_progress",
+                started_at=when,
             )
-            if treatment.status == "completed":
-                treatment.closed_at = now - timedelta(days=rng.randint(1, 20))
-            db.add(treatment)
-            db.flush()
+            self.db.add(treatment)
+            self.db.flush()
 
-            visit = Visit(
-                patient_id=patient.id,
-                treatment_id=treatment.id,
-                dentist_id=primary.id,
-                consulting_dentist_id=consulting.id if consulting else None,
-                visit_date=now - timedelta(days=rng.randint(1, 25)),
-                complaint=rng.choice(["Pain on chewing", "Sensitivity", "Routine", "Swelling"]),
-                clinical_notes="Demo visit — examined and treated.",
-            )
-            db.add(visit)
-            db.flush()
-            made_visits += 1
+        who = dentist or self.dentists[0]
+        first = procedures[0]
+        visit = Visit(
+            patient_id=patient.id,
+            treatment_id=treatment.id,
+            appointment_id=appointment.id if appointment else None,
+            dentist_id=who.id,
+            consulting_dentist_id=consulting.id if consulting else None,
+            visit_date=when,
+            complaint=complaint or self.rng.choice(COMPLAINTS),
+            clinical_notes=notes or self.rng.choice(
+                NOTES_BY_PROCEDURE.get(first, ["Treatment carried out as planned."])
+            ),
+        )
+        self.db.add(visit)
+        self.db.flush()
 
-            chosen = rng.sample(items, k=rng.randint(1, 3))
-            for it in chosen:
-                db.add(ProcedurePerformed(visit_id=visit.id, treatment_item_id=it.id))
-            db.flush()
-
-            # Invoice from the procedures (mirrors the 5.2 generation logic).
-            subtotal = sum((it.default_price for it in chosen), Decimal("0"))
-            discount = Decimal("0")
-            if rng.random() < 0.3:
-                discount = (subtotal * Decimal("0.1")).quantize(Decimal("0.01"))
-            total = subtotal - discount
-            invoice = Invoice(
-                patient_id=patient.id,
-                visit_id=visit.id,
-                subtotal=subtotal,
-                discount=discount,
-                total=total,
-            )
-            db.add(invoice)
-            db.flush()
-            for it in chosen:
-                db.add(
-                    InvoiceLine(
-                        invoice_id=invoice.id,
-                        treatment_item_id=it.id,
-                        description=it.name,
-                        amount=it.default_price,
+        for name in procedures:
+            item = self.items.get(name)
+            if item is not None:
+                self.db.add(
+                    ProcedurePerformed(
+                        visit_id=visit.id,
+                        treatment_item_id=item.id,
+                        tooth_ref=tooth if name != "Consultation" else None,
                     )
                 )
 
-            # Payment: paid / partially paid / unpaid mix.
-            roll = rng.random()
-            if roll < 0.5:  # paid
-                db.add(Payment(invoice_id=invoice.id, amount=total, mode=rng.choice(["cash", "upi", "card"])))
-                invoice.status = "paid"
-            elif roll < 0.8:  # partially paid
-                part = (total / 2).quantize(Decimal("0.01"))
-                db.add(Payment(invoice_id=invoice.id, amount=part, mode="cash"))
-                invoice.status = "partially_paid"
-            # else: unpaid (no payment row)
-            db.flush()
-            made_invoices += 1
+        # Medicines ride the same pipeline (6.7) — dispensed about a third of
+        # the time, as in a real surgery.
+        if self.rng.random() < 0.35:
+            med = self.rng.choice(self.meds)
+            self.db.add(
+                ProcedurePerformed(visit_id=visit.id, treatment_item_id=med.id, tooth_ref=None)
+            )
 
-        # --- a few file placeholders (metadata only; bytes written to storage) ---
-        from app.services.storage import get_storage
-        import io
+        if complete:
+            treatment.status = "completed"
+            treatment.closed_at = when
 
-        storage = get_storage()
-        made_files = 0
-        for patient in rng.sample(active_patients, k=min(5, len(active_patients))):
-            key = storage.save(io.BytesIO(_PNG))
-            db.add(
-                PatientFile(
-                    patient_id=patient.id,
-                    uploaded_by=dentists[0].id,
-                    kind="xray",
-                    original_filename="demo-xray.png",
-                    content_type="image/png",
-                    size_bytes=len(_PNG),
-                    caption="Demo X-ray",
-                    storage_key=key,
+        # The 6.8 rule: recording the sitting finishes the appointment.
+        if appointment is not None and appointment.status in ("booked", "arrived"):
+            appointment.status = "done"
+
+        self.db.flush()
+        return visit, treatment
+
+    # -- billing -------------------------------------------------------------
+
+    def bill(self, visit, *, discount="0.00", consultation_for=None):
+        """Generate the invoice, freezing each line's price (the 5.2 rule)."""
+        rows = self.db.execute(
+            select(TreatmentItem.id, TreatmentItem.name, TreatmentItem.default_price)
+            .join(ProcedurePerformed, ProcedurePerformed.treatment_item_id == TreatmentItem.id)
+            .where(ProcedurePerformed.visit_id == visit.id)
+            .order_by(TreatmentItem.name)
+        ).all()
+
+        lines = [
+            InvoiceLine(treatment_item_id=iid, description=name, amount=price)
+            for iid, name, price in rows
+        ]
+        # A per-dentist consultation fee bills as a CUSTOM line (6.7) — it has
+        # no catalogue row.
+        if consultation_for is not None and consultation_for.consultation_fee is not None:
+            lines.append(
+                InvoiceLine(
+                    treatment_item_id=None,
+                    description=f"Consultation — {consultation_for.name}",
+                    amount=consultation_for.consultation_fee,
                 )
             )
-            made_files += 1
+        if not lines:
+            return None
 
-        # --- lab work (6.6) --------------------------------------------------
-        # Two labs plus a spread of cases that exercises every state the Lab tab
-        # and the dashboard show: overdue, due soon, back-from-lab (undismissed),
-        # already dealt with, and a cancelled one.
-        db.flush()  # make sure the visits above have ids to link against
+        subtotal = sum((ln.amount for ln in lines), Decimal("0"))
+        disc = Decimal(discount)
+        invoice = Invoice(
+            patient_id=visit.patient_id,
+            visit_id=visit.id,
+            subtotal=subtotal,
+            discount=disc,
+            total=subtotal - disc,
+            status="unpaid",
+            created_at=visit.visit_date,
+        )
+        self.db.add(invoice)
+        self.db.flush()
+        for ln in lines:
+            ln.invoice_id = invoice.id
+            self.db.add(ln)
+        self.db.flush()
+        return invoice
 
-        labs = [
-            Lab(name="Sri Dental Lab", phone="98800 11223", address="Davangere"),
-            Lab(name="Precision Ceramics", phone="98800 44556", address="Bengaluru"),
-        ]
+    def pay(self, invoice, *, amount=None, mode=None, when=None):
+        """Take a payment and DERIVE the status from the sum (the 5.3 rule)."""
+        amt = Decimal(amount) if amount is not None else invoice.total
+        self.db.add(
+            Payment(
+                invoice_id=invoice.id,
+                amount=amt,
+                mode=mode or self.rng.choice(["cash", "upi", "card"]),
+                paid_at=when or invoice.created_at,
+            )
+        )
+        self.db.flush()
+
+        paid = self.db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.invoice_id == invoice.id
+            )
+        ) or Decimal("0")
+        if paid <= 0:
+            invoice.status = "unpaid"
+        elif paid < invoice.total:
+            invoice.status = "partially_paid"
+        else:
+            invoice.status = "paid"
+        self.db.flush()
+
+    # -- lab -----------------------------------------------------------------
+
+    def send_to_lab(self, patient, visit, *, sent, expected, sample, tooth,
+                    status="sent", received=None, follow_up_done=False):
+        case = LabCase(
+            patient_id=patient.id,
+            lab_id=self.rng.choice(self.labs).id,
+            visit_id=visit.id if visit else None,
+            sample_type=sample,
+            tooth_ref=tooth,
+            sent_date=sent,
+            expected_date=expected,
+            received_date=received,
+            status=status,
+            follow_up_done=follow_up_done,
+            created_by=self.actor.id,
+        )
+        self.db.add(case)
+        self.db.flush()
+        return case
+
+    def attach_xray(self, patient, visit, caption):
+        self.db.add(
+            PatientFile(
+                patient_id=patient.id,
+                visit_id=visit.id if visit else None,
+                uploaded_by=self.actor.id,
+                kind="image",
+                original_filename=f"iopa-{self.rng.randint(1000, 9999)}.png",
+                content_type="image/png",
+                size_bytes=len(_PNG),
+                caption=caption,
+                storage_key=f"demo/{uuid4()}.png",
+            )
+        )
+
+
+def main(do_reset: bool = False) -> None:
+    rng = random.Random(20260730)
+
+    with SessionLocal() as db:
+        if do_reset:
+            reset(db)
+        elif _already_seeded(db):
+            print("seed_demo: already seeded (marker present), skipping. Use --reset to redo.")
+            return
+
+        actor = db.scalar(select(StaffUser).where(StaffUser.roles.any("admin")))
+        if actor is None:
+            print("No admin staff row found — run `python -m app.seed` first.")
+            return
+
+        # --- the catalogue ---
+        items = []
+        for name, price in CATALOGUE:
+            it = TreatmentItem(name=name, default_price=Decimal(price), kind="treatment")
+            db.add(it)
+            items.append(it)
+        meds = []
+        for name, price in MEDICINES:
+            m = TreatmentItem(name=name, default_price=Decimal(price), kind="medicine")
+            db.add(m)
+            meds.append(m)
+
+        # --- dentists ---
+        dentists = []
+        for name, email, fee in DENTISTS:
+            d = db.scalar(select(StaffUser).where(StaffUser.email == email))
+            if d is None:
+                d = StaffUser(
+                    id=uuid4(), name=name, email=email, roles=["dentist"],
+                    active=True, consultation_fee=Decimal(fee),
+                )
+                db.add(d)
+            dentists.append(d)
+
+        labs = [Lab(name=n, phone=p, address=a) for n, p, a in LABS]
         db.add_all(labs)
         db.flush()
 
-        # Link cases to real visits so the "sent from this sitting" link is true.
-        seeded_visits = list(
-            db.scalars(
-                select(Visit).order_by(Visit.visit_date.desc()).limit(6)
-            ).all()
-        )
-        today = datetime.now(timezone.utc).date()
-        # (days_since_sent, days_until_expected, status, follow_up_done, type)
-        plan = [
-            (12, -4, "sent", False, "crown"),          # overdue by 4 days
-            (9, -1, "sent", False, "bridge"),          # overdue by 1
-            (4, 3, "sent", False, "denture_partial"),  # due in 3 days
-            (2, 6, "sent", False, "veneer"),           # due in 6
-            (14, -6, "received", False, "crown"),      # back, needs calling in
-            (20, -10, "received", True, "study_model"),# back and dealt with
-            (8, -2, "cancelled", False, "inlay_onlay"),# scrapped
-        ]
-        made_lab_cases = 0
-        for i, (sent_ago, due_in, status, done, stype) in enumerate(plan):
-            if not seeded_visits:
-                break
-            visit = seeded_visits[i % len(seeded_visits)]
-            sent_on = today - timedelta(days=sent_ago)
-            db.add(
-                LabCase(
-                    patient_id=visit.patient_id,
-                    lab_id=labs[i % len(labs)].id,
-                    visit_id=visit.id,
-                    appointment_id=visit.appointment_id,
-                    sample_type=stype,
-                    tooth_ref=rng.choice(["36", "11", "46", None]),
-                    sent_date=sent_on,
-                    expected_date=today + timedelta(days=due_in),
-                    received_date=(today + timedelta(days=due_in)) if status == "received" else None,
-                    status=status,
-                    follow_up_done=done,
-                    created_by=dentists[0].id,
-                    notes="Shade A2" if stype in {"crown", "veneer", "bridge"} else None,
-                )
-            )
-            made_lab_cases += 1
+        c = Clinic(db, rng, dentists, items, meds, labs, actor)
 
-        # Marker so re-runs are no-ops.
-        record_audit(
-            db,
-            actor_id=None,
-            action="seed_demo",
-            entity="demo",
-            entity_id=None,
-            details={
-                "marker": _DEMO_MARKER,
-                "dentists": len(dentists),
-                "appointments": made_appts,
-                "visits": made_visits,
-                "invoices": made_invoices,
-                "files": made_files,
-                "lab_cases": made_lab_cases,
-            },
-        )
+        # Clinic-day helper: appointments land in working hours.
+        def at(days_ago: int, hour: int, minute: int = 0) -> datetime:
+            d = datetime.now(timezone.utc).date() - timedelta(days=days_ago)
+            return datetime.combine(d, time(hour, minute), tzinfo=timezone.utc)
+
+        today = datetime.now(timezone.utc).date()
+        used_names: set[str] = set()
+
+        def person(i: int) -> str:
+            while True:
+                n = f"{FIRST_NAMES[i % len(FIRST_NAMES)]} {rng.choice(SURNAMES)}"
+                if n not in used_names:
+                    used_names.add(n)
+                    return n
+
+        def phone() -> str:
+            return f"9{rng.randint(700000000, 899999999)}"
+
+        def dob(age: int) -> date:
+            return date(today.year - age, rng.randint(1, 12), rng.randint(1, 28))
+
+        made = {"patients": 0, "appointments": 0, "visits": 0,
+                "invoices": 0, "payments": 0, "lab": 0, "files": 0}
+        idx = 0
+
+        # ============================================================ GROUP A
+        # 12 completed single-visit journeys, fully billed and paid.
+        single = ["Scaling / cleaning", "Composite filling", "Extraction",
+                  "Teeth whitening", "Fluoride application", "Consultation"]
+        for k in range(12):
+            days = 100 - k * 7
+            p = c.register(
+                person(idx), phone=phone(), dob=dob(rng.randint(19, 68)),
+                gender=rng.choice(["female", "male"]),
+                notes=rng.choice(MEDICAL_NOTES) if rng.random() < 0.2 else None,
+            )
+            idx += 1
+            proc = single[k % len(single)]
+            when = at(days, rng.choice([10, 11, 12, 16, 17]), rng.choice([0, 30]))
+            dentist = dentists[k % 2]
+            appt = c.book(p, when, dentist=dentist, reason=proc, status="arrived")
+            visit, _ = c.treat(
+                p, when=when, procedures=[proc], appointment=appt,
+                title=proc, tooth=rng.choice(TEETH) if proc != "Consultation" else None,
+                complete=True, dentist=dentist,
+            )
+            inv = c.bill(visit, consultation_for=dentist if k % 4 == 0 else None)
+            if inv:
+                c.pay(inv, when=when)
+                made["invoices"] += 1
+                made["payments"] += 1
+            made["patients"] += 1
+            made["appointments"] += 1
+            made["visits"] += 1
+
+        # ============================================================ GROUP B
+        # 8 multi-sitting treatments still in progress, follow-up BOOKED.
+        for k in range(8):
+            p = c.register(
+                person(idx), phone=phone(), dob=dob(rng.randint(24, 62)),
+                gender=rng.choice(["female", "male"]),
+                notes=rng.choice(MEDICAL_NOTES) if rng.random() < 0.25 else None,
+            )
+            idx += 1
+            tooth = rng.choice(TEETH)
+            dentist = dentists[k % 2]
+            big = "Root canal treatment" if k % 2 == 0 else "Crown (PFM)"
+            title = f"{'RCT' if k % 2 == 0 else 'Crown'} tooth {tooth}"
+
+            # Sitting 1
+            d1 = 40 - k * 4
+            w1 = at(d1, rng.choice([10, 11, 15]), rng.choice([0, 30]))
+            a1 = c.book(p, w1, dentist=dentist, reason=title, status="arrived")
+            v1, treatment = c.treat(
+                p, when=w1, procedures=[big, "X-ray (IOPA)"], appointment=a1,
+                title=title, tooth=tooth, complete=False, dentist=dentist,
+            )
+            inv1 = c.bill(v1, consultation_for=dentist)
+            if inv1:
+                # Part-paid: a real multi-sitting case often pays in instalments.
+                c.pay(inv1, amount=str((inv1.total / 2).quantize(Decimal("0.01"))), when=w1)
+                made["invoices"] += 1
+                made["payments"] += 1
+
+            # Sitting 2, under the SAME treatment
+            d2 = d1 - 10
+            w2 = at(d2, rng.choice([10, 12, 16]), rng.choice([0, 30]))
+            a2 = c.book(p, w2, dentist=dentist, reason=f"{title} — sitting 2",
+                        treatment=treatment, status="arrived")
+            v2, _ = c.treat(
+                p, when=w2, procedures=[big], appointment=a2, treatment=treatment,
+                tooth=tooth, complete=False, dentist=dentist,
+                consulting=dentists[(k + 1) % 2] if k % 3 == 0 else None,
+            )
+            inv2 = c.bill(v2)
+            if inv2:
+                made["invoices"] += 1
+                if k % 3 != 0:  # some left unpaid on purpose
+                    c.pay(inv2, when=w2)
+                    made["payments"] += 1
+
+            # The next sitting IS booked — so these must NOT appear on the
+            # follow-up report.
+            c.book(p, at(-(3 + k), rng.choice([10, 11, 15]), 0), dentist=dentist,
+                   reason=f"{title} — next sitting", treatment=treatment, status="booked")
+
+            if k < 3:
+                c.attach_xray(p, v1, f"IOPA tooth {tooth} — pre-op")
+                made["files"] += 1
+
+            made["patients"] += 1
+            made["appointments"] += 3
+            made["visits"] += 2
+
+        # ============================================================ GROUP C
+        # 4 open treatments with NO future appointment -> the 4.8 report.
+        for k in range(4):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(28, 70)),
+                           gender=rng.choice(["female", "male"]))
+            idx += 1
+            tooth = rng.choice(TEETH)
+            dentist = dentists[k % 2]
+            when = at(25 - k * 5, rng.choice([11, 14, 17]), 30)
+            appt = c.book(p, when, dentist=dentist, reason=f"RCT tooth {tooth}", status="arrived")
+            visit, _ = c.treat(
+                p, when=when, procedures=["Root canal treatment"], appointment=appt,
+                title=f"RCT tooth {tooth}", tooth=tooth, complete=False, dentist=dentist,
+            )
+            inv = c.bill(visit)
+            if inv:
+                made["invoices"] += 1
+                if k % 2 == 0:
+                    c.pay(inv, amount="1000.00", when=when)
+                    made["payments"] += 1
+            made["patients"] += 1
+            made["appointments"] += 1
+            made["visits"] += 1
+
+        # ============================================================ GROUP D
+        # 3 treated-but-UNBILLED visits -> the new "Ready to bill" card.
+        for k in range(3):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(20, 55)),
+                           gender=rng.choice(["female", "male"]))
+            idx += 1
+            proc = ["Scaling / cleaning", "Composite filling", "Extraction"][k]
+            when = at(k, rng.choice([10, 12, 16]), 0)
+            appt = c.book(p, when, dentist=dentists[k % 2], reason=proc, status="arrived")
+            c.treat(p, when=when, procedures=[proc], appointment=appt, title=proc,
+                    tooth=rng.choice(TEETH), complete=True, dentist=dentists[k % 2])
+            made["patients"] += 1
+            made["appointments"] += 1
+            made["visits"] += 1
+
+        # ============================================================ GROUP E
+        # 5 lab cases across every stage.
+        lab_plan = [
+            ("crown", 14, -5, "sent", None, False),        # overdue
+            ("bridge", 9, -2, "sent", None, False),        # overdue
+            ("denture_partial", 4, 3, "sent", None, False),  # due soon
+            ("crown", 20, -12, "received", 6, False),      # back, needs a call
+            ("veneer", 26, -18, "received", 15, True),     # back, dealt with
+        ]
+        for k, (sample, sent_ago, expected_offset, status, recv_ago, done) in enumerate(lab_plan):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(30, 66)),
+                           gender=rng.choice(["female", "male"]))
+            idx += 1
+            tooth = rng.choice(TEETH)
+            dentist = dentists[k % 2]
+            when = at(sent_ago, rng.choice([10, 11, 15]), 0)
+            appt = c.book(p, when, dentist=dentist, reason=f"Crown prep tooth {tooth}",
+                          status="arrived")
+            visit, treatment = c.treat(
+                p, when=when, procedures=["Crown (PFM)"], appointment=appt,
+                title=f"Crown tooth {tooth}", tooth=tooth, complete=False, dentist=dentist,
+            )
+            inv = c.bill(visit)
+            if inv:
+                c.pay(inv, amount=str((inv.total / 2).quantize(Decimal("0.01"))), when=when)
+                made["invoices"] += 1
+                made["payments"] += 1
+            c.send_to_lab(
+                p, visit,
+                sent=today - timedelta(days=sent_ago),
+                expected=today - timedelta(days=expected_offset)
+                if expected_offset > 0 else today + timedelta(days=-expected_offset),
+                sample=sample, tooth=tooth, status=status,
+                received=today - timedelta(days=recv_ago) if recv_ago else None,
+                follow_up_done=done,
+            )
+            made["patients"] += 1
+            made["appointments"] += 1
+            made["visits"] += 1
+            made["lab"] += 1
+
+        # A cancelled lab case, so that filter has content.
+        cancelled_p = c.register(person(idx), phone=phone(), dob=dob(44), gender="male")
+        idx += 1
+        cw = at(30, 11, 0)
+        ca = c.book(cancelled_p, cw, dentist=dentists[0], reason="Crown prep", status="arrived")
+        cv, _ = c.treat(cancelled_p, when=cw, procedures=["Crown (PFM)"], appointment=ca,
+                        title="Crown tooth 26", tooth="26", complete=False)
+        c.send_to_lab(cancelled_p, cv, sent=today - timedelta(days=30),
+                      expected=today - timedelta(days=23), sample="crown", tooth="26",
+                      status="cancelled")
+        made["patients"] += 1
+        made["appointments"] += 1
+        made["visits"] += 1
+        made["lab"] += 1
+
+        # ============================================================ GROUP F
+        # 2 walk-ins (no appointment at all) — a very common real case.
+        for k in range(2):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(21, 60)),
+                           gender=rng.choice(["female", "male"]))
+            idx += 1
+            when = at(k + 1, 18, 0)
+            visit, _ = c.treat(
+                p, when=when, procedures=["Consultation", "X-ray (IOPA)"],
+                appointment=None, title="Emergency consultation",
+                complaint="Walk-in — sudden pain", complete=True, dentist=dentists[k % 2],
+            )
+            inv = c.bill(visit, consultation_for=dentists[k % 2])
+            if inv:
+                c.pay(inv, when=when)
+                made["invoices"] += 1
+                made["payments"] += 1
+            made["patients"] += 1
+            made["visits"] += 1
+
+        # ============================================================ GROUP G
+        # No-shows and cancellations, so the calendar + no-show report have data.
+        for k in range(3):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(22, 58)),
+                           gender=rng.choice(["female", "male"]))
+            idx += 1
+            c.book(p, at(12 - k * 3, rng.choice([10, 14]), 30), dentist=dentists[k % 2],
+                   reason="Check-up", status="no_show" if k < 2 else "cancelled")
+            made["patients"] += 1
+            made["appointments"] += 1
+
+        # An archived patient, so the archive filter hides something real.
+        c.register(person(idx), phone=phone(), dob=dob(71), gender="female",
+                   notes="Moved out of town.", archived=True)
+        idx += 1
+        made["patients"] += 1
+
+        # ============================================================ TODAY
+        # A live day: some finished, one in the chair, several still to come —
+        # so the dashboard is alive the moment it's opened.
+        today_plan = [
+            (9, 30, "Scaling / cleaning", "done"),
+            (10, 15, "Composite filling", "done"),
+            (11, 0, "Root canal treatment", "arrived"),
+            (12, 0, "Consultation", "booked"),
+            (16, 30, "Extraction", "booked"),
+            (17, 15, "Check-up", "booked"),
+        ]
+        for k, (hh, mm, reason, status) in enumerate(today_plan):
+            p = c.register(person(idx), phone=phone(), dob=dob(rng.randint(18, 64)),
+                           gender=rng.choice(["female", "male"]),
+                           notes=rng.choice(MEDICAL_NOTES) if k == 2 else None)
+            idx += 1
+            dentist = dentists[k % 2]
+            when = at(0, hh, mm)
+            appt = c.book(p, when, dentist=dentist, reason=reason, status=status)
+            made["patients"] += 1
+            made["appointments"] += 1
+
+            if status == "done":
+                # Finished today AND written up -> billed, one left to pay.
+                visit, _ = c.treat(p, when=when, procedures=[reason], appointment=appt,
+                                   title=reason, tooth=rng.choice(TEETH),
+                                   complete=True, dentist=dentist)
+                inv = c.bill(visit, consultation_for=dentist if k == 0 else None)
+                if inv:
+                    made["invoices"] += 1
+                    if k == 0:
+                        c.pay(inv, when=when)
+                        made["payments"] += 1
+                made["visits"] += 1
+
+        # One appointment finished today with NOTHING recorded -> the new nudge.
+        p = c.register(person(idx), phone=phone(), dob=dob(37), gender="male")
+        idx += 1
+        c.book(p, at(0, 9, 0), dentist=dentists[0], reason="Follow-up check", status="done")
+        made["patients"] += 1
+        made["appointments"] += 1
+
+        record_audit(db, actor_id=actor.id, action=_DEMO_MARKER, entity="seed",
+                     entity_id=None, details=made)
         db.commit()
 
-    print(
-        f"seed_demo: {len(dentists)} dentists, {len(items)} catalogue items, "
-        f"{made_appts} appointments, {made_visits} visits, {made_invoices} invoices, "
-        f"{made_files} files, {made_lab_cases} lab cases. Sign in as the admin to browse."
-    )
+        print("seeded a demo clinic:")
+        for k, v in made.items():
+            print(f"  {k:14} {v}")
 
 
 if __name__ == "__main__":
-    seed_demo()
+    main(do_reset="--reset" in sys.argv)

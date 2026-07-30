@@ -159,11 +159,13 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 6.1 there are thirteen models — `staff_user`, `audit_log`, `patient`, `appointment`,
+As of 6.9 there are **fifteen models** — `staff_user`, `audit_log`, `patient`, `appointment`,
 `treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
-`invoice_line`, `payment`, `patient_file` — and eight `app/services/` modules (`audit`, `appointments`,
-`visits`, `treatments`, `clinic`, `billing`, `storage`, `reports`). The billing loop is complete
-(5.2–5.5); 5.6 added patient file uploads; 6.1 added practice reports.
+`invoice_line`, `payment`, `patient_file`, `lab`, `lab_case` — and **nine `app/services/` modules**
+(`audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`, `storage`, `reports`, `lab`).
+The billing loop is complete (5.2–5.5); 5.6 added patient file uploads; 6.1 added practice reports;
+6.6 added lab management; 6.7 split the catalogue by `kind` and put a consultation fee on the
+dentist; 6.8 added the workflow rules that keep those tables consistent with each other.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -208,13 +210,15 @@ As of 6.1 there are thirteen models — `staff_user`, `audit_log`, `patient`, `a
   UX layer (a friendly 409) on top of the real guarantee, which is the DB constraint — the two use
   the identical UTC `tsrange` overlap expression so they always agree. Returns `[]` for an
   unassigned (`dentist_id is None`) slot.
-- **`app/models/treatment_item.py`** — `TreatmentItem`, the flat treatment/procedure catalogue
-  (Phase 4, step 4.1): `name` (unique, indexed), `default_price`, `active`, timestamps. **The
+- **`app/models/treatment_item.py`** — `TreatmentItem`, the flat priced catalogue
+  (Phase 4, step 4.1): `name`, `default_price`, `active`, timestamps. **The
   project's first money column** — `default_price` is `Numeric(10, 2)` in Postgres and `Decimal` in
   Python, **never a float**: binary floating point cannot represent decimal currency exactly, and a
-  rounding error in an invoice is a real bug. Phase 5's invoice/payment amounts must follow the same
+  rounding error in an invoice is a real bug. Phase 5's invoice/payment amounts follow the same
   rule. Items are **deactivated, never deleted** (`active`), so past visits/invoices that reference
-  one still resolve.
+  one still resolve. **As of 6.7 it carries a `kind`** (`treatment` | `medicine`) and the unique is
+  composite **`(kind, name)`**, not bare `name` — the same word may name both a procedure and a
+  drug. See "Pricing" below for why the consultation fee is deliberately *not* a third kind.
 - **`app/models/treatment.py`** — `Treatment`, **the heart of the clinical model** (Phase 4, step
   4.2). Dental work is multi-visit — an RCT is 2–4 sittings and the dentist often doesn't know the
   count upfront — so a visit can't be a standalone event; it needs a thread to hang off. A treatment
@@ -493,7 +497,9 @@ check-in + **Start visit**) · **Chairside/visit** (`/patients/[id]/visits/new?a
 dentist records complaint/procedures/notes + consulting dentist, then **Save & draft invoice** →) ·
 **Invoice** (`/invoices/[id]`) + **receipt** · **Reports** · **Settings**. The **consulting dentist**
 (the handoff — dentist A checks, dentist B treats) is a nullable FK on **both** `appointment` and
-`visit`; ### Lab management (6.6)
+`visit`.
+
+### Lab management (6.6)
 
 Two tables model work sent to outside labs: **`lab`** (the vendor list — unique name, phone, address,
 `active`; deactivate-never-delete like treatment items) and **`lab_case`** (one item of work: patient
@@ -527,7 +533,64 @@ visit form and "Send to lab" on calendar rows.
 login; the clinic uses a shared receptionist login), `POST /staff/{id}/deactivate|activate` (soft),
 `?include_inactive=`; and **by-dentist reports** — `GET /reports?dentist_id=` narrows revenue/mix/no-show
 to one dentist (attribution = the visit's primary dentist) and the response carries a `by_dentist`
-breakdown. Demo data: `app/seed_demo.py`.
+breakdown. **6.7** added `PATCH /staff/{id}` (admin) to set a dentist's `consultation_fee`, using
+`exclude_unset` so an omitted field differs from an explicit `null` (= clear the fee).
+Demo data: `app/seed_demo.py`.
+
+### Pricing — two mechanisms, on purpose (6.7)
+
+The clinic charges for three things, and they reach an invoice by **two different routes**:
+
+- **Treatments and medicines are the same table.** `treatment_item.kind` (`treatment` | `medicine`)
+  is a label, not a second table, so a medicine rides the existing
+  `treatment_item → procedure_performed → invoice_line` pipeline unchanged — it gets the 5.2 price
+  snapshot and appears in the procedure-mix report as a named item for free. `GET /treatment-items?kind=`
+  is **optional** so every pre-6.7 caller still sees the whole catalogue.
+- **The consultation fee is per-DENTIST**, so it lives on `staff_user.consultation_fee` and has no
+  catalogue row. It therefore *cannot* be a `procedure_performed` (that FK points at
+  `treatment_item`) and reaches the invoice as a **custom `extra_lines` entry** — the mechanism 5.2
+  already provided, so no backend change was needed. The fee is **nullable = "not set", which is not
+  0.00**, and the visit screen **offers** it with an Add button rather than adding it automatically:
+  auto-adding would silently re-bill a consultation on every follow-up sitting of a multi-visit RCT.
+
+`kind` is deliberately absent from `PATCH /treatment-items/{id}` — re-kinding a live item would move
+already-billed revenue between report buckets. Retire and re-add instead.
+
+### Workflow rules that keep the data honest (6.8)
+
+Added after an end-to-end walkthrough of the real API found the app losing work between screens.
+All four are query-level or service-level; **no migration**.
+
+- **Recording a visit closes its appointment.** `services/visits.close_appointment_for_visit`, called
+  inside the visit's transaction so the clinical record and the calendar can never disagree. It
+  **walks the 3.5 `can_transition` machine** rather than assigning the column: `cancelled`/`no_show`
+  stay terminal, walk-ins are skipped. **`booked` closes too** (a busy clinic treats without clicking
+  "arrived", and the visit proves both happened) — but that relaxation is confined to the auto-close;
+  `POST /appointments/{id}/status` still refuses booked→done with a 409.
+- **`patient_id` really filters now.** On `/invoices` it was **undeclared**, so FastAPI silently
+  dropped it and the endpoint returned every invoice in the clinic. On `/appointments` it is a
+  **third, date-free mode** (the profile asks "when are they next in?" without knowing a date).
+  *The standing lesson:* declare every filter the UI passes, and **test that a filter excludes the
+  other rows** — a "returns 200" assertion passes against exactly this bug.
+- **Worklists.** `GET /visits/unbilled` (LEFT JOIN invoice WHERE NULL — treated work nobody billed)
+  and `GET /appointments?missing_visit=true` (finished, but nothing written up). Both are literal
+  paths declared **before** their routers' `/{id}` routes.
+- **`billing.patient_balance()`** sums **per-invoice outstanding** (each already floored at 0), not
+  `billed - paid`: otherwise an overpayment on one bill cancels a genuine debt on another and the
+  patient looks settled when they are not.
+
+### Demo data is simulated, not inserted (6.9)
+
+`app/seed_demo.py` runs a small `Clinic` harness that performs the same actions staff perform —
+register → book → arrive → treat → bill → pay (→ follow up / send to lab) — **in chronological
+order**, applying the same rules as the API (including the 6.8 auto-close and the 5.2/5.3 billing
+rules). The previous table-by-table seed produced states the app cannot: appointments `done` with no
+visit, visits whose appointment was still `arrived`, patients with no history at all.
+
+**If a state is reachable in the seed, it is reachable in the app** — which makes the seed a rough
+end-to-end exercise of the domain rules as well as demo content. Deterministic RNG; `--reset` wipes
+first; marker-guarded otherwise. `book()` walks forward slot-by-slot to find a free one, because the
+GiST no-overlap constraint applies to the seed like any other client.
 
 ### Design system + app shell (6.2, sidebar in 6.3)
 

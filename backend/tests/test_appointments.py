@@ -397,15 +397,28 @@ def test_day_bounds_use_clinic_timezone(as_staff):
         db.close()
 
     try:
+        # Measure as a DELTA rather than an absolute count: this suite shares the
+        # dev database with the demo seed, which legitimately has appointments on
+        # these dates. A test that only passes on an empty DB is fragile — real
+        # data would break it too (the 6.4 lesson).
+        before_2nd = client.get("/appointments", params={"date": "2026-08-02"}).json()["total"]
+        before_1st = client.get("/appointments", params={"date": "2026-08-01"}).json()["total"]
+
         # 2026-08-01 19:30 UTC == 2026-08-02 01:00 IST (unassigned → no conflict).
         early_ist = datetime(2026, 8, 1, 19, 30, tzinfo=timezone.utc)
         _book(client, patient_id=str(pid), start_time=_iso(early_ist))
 
         on_2nd = client.get("/appointments", params={"date": "2026-08-02"}).json()
-        assert on_2nd["total"] == 1, "IST evening/early appt should fall on the clinic day"
+        assert on_2nd["total"] == before_2nd + 1, (
+            "IST evening/early appt should fall on the clinic day"
+        )
+        assert str(pid) in {a["patient_id"] for a in on_2nd["items"]}
 
         on_1st = client.get("/appointments", params={"date": "2026-08-01"}).json()
-        assert on_1st["total"] == 0, "must not appear on its UTC date under IST bounds"
+        assert on_1st["total"] == before_1st, (
+            "must not appear on its UTC date under IST bounds"
+        )
+        assert str(pid) not in {a["patient_id"] for a in on_1st["items"]}
     finally:
         db = SessionLocal()
         try:
