@@ -15,9 +15,49 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–5 COMPLETE + 5.6 interlude done. PHASE 6 IN PROGRESS — 6.1 (reports), 6.2
-(UI redesign), and 6.3 (usability overhaul — views/entry-points/chairside/dentist-handoff/demo-data)
-done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
+**Where we are: Phases 0–5 COMPLETE (+ the 5.6 uploads interlude). PHASE 6 IN PROGRESS —
+6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo/invoices-ledger/routing/UI-library ·
+6.5 manage dentists + by-dentist analytics · 6.6 Lab Management — all DONE.
+Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
+
+> **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
+> from the clinic owner (the user's mother, a practising dentist), so expect more of the same: small
+> targeted asks, each planned + built as its own step.
+
+### How to run it (do this first)
+
+```powershell
+# Docker Desktop's engine exits between sessions on this machine — relaunch it and wait:
+docker info                      # if this fails, start "Docker Desktop" and poll until it succeeds
+cd c:\Users\rishi\Desktop\clinic_MVP
+docker compose up -d             # db + backend + frontend + caddy
+docker compose run --rm backend alembic upgrade head    # only if migrations are pending
+```
+Then open **http://localhost** and sign in (Supabase Auth; creds come from the gitignored root `.env`).
+`docker compose down` when finished — **the user runs this themselves; leave the stack UP at the end
+of a step** so they can click through.
+
+**Run the tests / a migration** (both need the `backend/` bind-mount so files land on the host):
+```powershell
+docker compose run --rm -v "${PWD}\backend:/app" backend python -m pytest -q
+docker compose run --rm -v "${PWD}\backend:/app" backend alembic revision --autogenerate -m "msg"
+```
+**Frontend:** `cd frontend; npm run lint; npm run build` (both must be green before a step is done).
+After changing deps or a migration, **rebuild the image** (`docker compose build backend frontend`).
+
+### The working rhythm the user expects (they've corrected me on this — follow it)
+
+1. **`EnterPlanMode` for every step** — a real plan-mode gate, not a plan pasted as text. Use
+   `AskUserQuestion` for the genuine design forks, then `ExitPlanMode` for approval. The plan's last
+   item is **always "update docs"**.
+2. **After approval, keep a live `TodoWrite` list** — they watch items flip pending → in-progress →
+   done. That visibility is the point.
+3. **Build, verify, then STOP.** Report "ready to commit" + a suggested message and wait — **the user
+   owns git** (never run add/commit/push; read-only git is fine).
+4. **Leave the app running** for their click-through (full stack when the step has UI; db+backend is
+   enough for a backend-only step). They run `docker compose down`.
+5. **Be honest about what you did and didn't verify.** Tests + live API checks are yours; the browser
+   click-through is theirs (auth is real in the browser). Say so explicitly every time.
 
 - **Phase 0–1:** scaffold, Docker Compose stack (db/backend/frontend/caddy), Supabase auth (JWT
   verified on the API, roles from *our* `staff_user.roles`), audit-log machinery.
@@ -30,20 +70,18 @@ done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
   **open-treatments-with-no-follow-up** dashboard flag → the **4.9 wrap**: clinic settings + a real
   clinic timezone. The clinical loop works end to end.
 
-**Current facts a new session needs:**
-- **Migration head = `19b4e1314059`** (the **thirteenth** migration, `add consulting dentist`, 6.3 —
-  adds `consulting_dentist_id` FK to `appointment` + `visit`).
-- **Thirteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
+**Current facts a new session needs (ONE source of truth — keep this block correct):**
+- **Migration head = `6b93975ddf46`** (the **14th**, `add lab management`, 6.6). Predecessor:
+  `19b4e1314059` (13th, `add consulting dentist`, 6.3).
+- **Fifteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
-  `payment`, `patient_file`.
-- **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
-  `billing`, `storage`, `reports`.
+  `payment`, `patient_file`, **`lab`**, **`lab_case`**.
+- **Nine `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
+  `billing`, `storage`, `reports`, **`lab`**.
 - **264 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
   **`app.seed_demo`** (full demo dataset incl. lab cases), `app.seed_labs_topup` (a one-off that adds
-  only the 6.6 lab demo rows to a DB seeded before 6.6 — `seed_demo` is marker-guarded).
-- **Migration head = `6b93975ddf46`** (the **14th**, `add lab management`, 6.6).
-- **Fifteen models** — the 6.6 additions are **`lab`** (vendor list) and **`lab_case`**.
-- **Nine `app/services/` modules** — 6.6 added **`lab`**.
+  only the 6.6 lab demo rows to a DB seeded before 6.6 — `seed_demo` is marker-guarded; delete this
+  script once it's served its purpose).
 - **Human-readable ids exist now** (6.6): `appointment.number` → shown **`A-1042`**, `lab_case.number`
   → **`L-1042`**. Both come from Postgres sequences (start 1001); the migration **backfilled** the 25
   existing appointments. The `A-`/`L-` prefixes are display-only. **Gotcha:** a `number` column needs
@@ -114,12 +152,11 @@ done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
 ~~5.4 billing UI + printable receipt~~ · ~~5.5 today's collections~~. Money stays `Numeric`/`Decimal`,
 never float (the 4.1 rule). An `INVOICE` is **per-visit** (ERD §9), UNIQUE on `invoice.visit_id`.
 
-**Next: PHASE 6 — reports & local polish (BUILD_PLAN §10).** 6.1 reports (revenue trend, procedure mix,
-no-show rate — an Admin `/reports` screen, BUILD_PLAN §6) · 6.2 error/loading/empty states (the deferred
-visual-polish pass — see [[defer-visual-polish-to-phase-6]]) · 6.3 demo to the user + fix feedback. Much
-of 6.1's data is now reachable (payments for revenue, `procedure_performed`/`invoice_line` for procedure
-mix, appointment status for no-show rate). **Still local-only — no deploy config until Phase 7.**
-**Generation (5.2):** `POST /visits/{visit_id}/invoice` freezes procedure lines (name + `default_price`)
+**PHASE 6 IS DONE through 6.6** (6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo +
+invoices ledger + chairside routing + shadcn/sonner · 6.5 manage dentists + by-dentist analytics ·
+6.6 Lab Management). **Still local-only — no deploy config until Phase 7.**
+
+**Billing reference — Generation (5.2):** `POST /visits/{visit_id}/invoice` freezes procedure lines (name + `default_price`)
 + optional `extra_lines`, minus discount → `total`. **Payment capture (5.3):**
 `POST /invoices/{id}/payments` (`{amount, mode}`, `mode` a `Literal[cash,card,upi]`); `invoice.status`
 is **derived** from the payment sum (`unpaid`/`partially_paid`/`paid`), never client-set;
@@ -135,7 +172,7 @@ with the user whether it needs any new backend read (likely not).
 |---|---|---|
 | ~~Clinic hours + slot size hardcoded~~ | **DONE in 4.9** — from `clinic_settings` via `useClinicSettings`; `week.ts` constants are now just fallbacks. | — |
 | ~~No clinic timezone~~ | **DONE in 4.9** — day bounds are clinic-zone (`clinic_day_bounds`), UI renders in the clinic zone via `date-fns-tz`. | — |
-| **No appointment seed script** | Only `app.seed` (admin) + `app.seed_patients` exist. Demo appointments have been created ad hoc. Would help exercise the calendar/dashboard with data. | `backend/app/` |
+| ~~No appointment seed script~~ | **DONE in 6.3** — `app.seed_demo` populates every screen (dentists, appointments across all statuses, visits, invoices+payments, files, and lab cases as of 6.6). Run `docker compose run --rm backend python -m app.seed_demo`. | `backend/app/seed_demo.py` |
 | ~~Price snapshot question (→ 5.2)~~ | **ANSWERED in 5.1: freeze it.** `invoice_line.description` + `amount` are snapshotted at generation; `procedure_performed` keeps no price column. 5.2's generation must COPY name+price from `treatment_item` into the line. | `backend/app/models/invoice_line.py` |
 
 **Treatment catalogue (4.1):** `treatment_item` = flat `name` (unique) + `default_price` + `active`.
@@ -273,8 +310,11 @@ take effect immediately, without re-issuing tokens.
 - Seed/fake data only until Phase 7. No real patient data on a laptop.
 
 **Out of scope — do not build:** prescriptions · treatment plans (quoted/estimated) · consent
-forms · dental charting/odontogram · inventory · lab work tracking · patient portal or any
-patient login · insurance claims. If a task seems to need one, stop and ask.
+forms · **dental charting/odontogram** · inventory · patient portal or any patient login ·
+insurance claims. If a task seems to need one, stop and ask.
+**Note:** *patient file uploads* (5.6) and *lab work tracking* (6.6) were originally on this list and
+are now **built**, at the owner's request — don't "correct" them back out. File uploads are opaque
+storage, NOT charting; the odontogram stays out.
 
 **Environment:**
 - Python deps live in the conda env `dental-clinic` (Python 3.12) — **never base, never
