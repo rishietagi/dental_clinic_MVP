@@ -14,6 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   CalendarDays,
+  FlaskConical,
   LayoutDashboard,
   Menu,
   Moon,
@@ -43,6 +44,7 @@ const NAV: NavItem[] = [
   { label: "Patients", href: "/patients", icon: Users },
   { label: "Calendar", href: "/calendar", icon: CalendarDays },
   { label: "Invoices", href: "/invoices", icon: Receipt },
+  { label: "Lab", href: "/lab", icon: FlaskConical },
   { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
   { label: "Treatments", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },
   { label: "Settings", href: "/settings/clinic", icon: Settings, anyOf: ["admin"] },

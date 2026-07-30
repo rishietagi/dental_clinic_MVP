@@ -493,7 +493,36 @@ check-in + **Start visit**) · **Chairside/visit** (`/patients/[id]/visits/new?a
 dentist records complaint/procedures/notes + consulting dentist, then **Save & draft invoice** →) ·
 **Invoice** (`/invoices/[id]`) + **receipt** · **Reports** · **Settings**. The **consulting dentist**
 (the handoff — dentist A checks, dentist B treats) is a nullable FK on **both** `appointment` and
-`visit`; **`GET /staff?role=dentist`** (router `app/routers/staff.py`) feeds the dropdowns. **6.5** added staff
+`visit`; ### Lab management (6.6)
+
+Two tables model work sent to outside labs: **`lab`** (the vendor list — unique name, phone, address,
+`active`; deactivate-never-delete like treatment items) and **`lab_case`** (one item of work: patient
+NOT NULL, lab NOT NULL, nullable visit/appointment links, sample type, tooth, `sent_date`/
+`expected_date`/`received_date`, `status`, `follow_up_done`, notes). A CHECK enforces
+`expected_date >= sent_date`.
+
+**The workflow decision:** sending a sample does **not** change the appointment — it still closes
+`done` (an appointment is a calendar slot; holding it open would misreport the dentist as busy). The
+wait lives on the lab case (`sent → received`, plus `cancelled`), the treatment stays `in_progress`,
+and because the lifecycle deliberately has no "fitted" state, `follow_up_done` is a dismiss flag
+behind the dashboard's "Back from lab — call the patient in" list.
+
+**Readable ids:** `lab_case.number` and `appointment.number` are Integers fed by Postgres sequences
+(start 1001), rendered `L-1042` / `A-1042` — staff can't quote a UUID to a lab. The migration
+backfilled existing appointments. The model columns carry `server_default=nextval(...)` so SQLAlchemy
+omits them from INSERTs.
+
+`app/services/lab.py` (the **ninth** service module) holds the lifecycle rules and the dashboard
+bucketing (overdue / due-soon / back-from-lab) computed against **clinic-zone today**.
+`app/routers/labs.py` manages vendors (admin writes); `app/routers/lab_cases.py` handles cases —
+`POST /lab-cases`, `GET /lab-cases` (`?status=`/`?patient_id=`), `GET /lab-cases/dashboard` (declared
+**before** `/{case_id}`), and the `received` / `cancel` / `follow-up-done` transitions. **Any active
+staff** may read and write: sending and receiving samples is front-desk work, not a clinical-record
+write. Frontend: the **Lab** tab (`/lab`), the send form (`/lab/new`, deep-linkable with
+`?patient/?visit/?appointment`), a dashboard card, Settings > Labs, plus "Save & send to lab" on the
+visit form and "Send to lab" on calendar rows.
+
+**`GET /staff?role=dentist`** (router `app/routers/staff.py`) feeds the dropdowns. **6.5** added staff
 **management** on `/settings/clinic`: `POST /staff` (admin, create a name-only dentist record — NOT a
 login; the clinic uses a shared receptionist login), `POST /staff/{id}/deactivate|activate` (soft),
 `?include_inactive=`; and **by-dentist reports** — `GET /reports?dentist_id=` narrows revenue/mix/no-show

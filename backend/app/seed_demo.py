@@ -31,6 +31,8 @@ from app.models.appointment import Appointment
 from app.models.audit_log import AuditLog
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
+from app.models.lab import Lab
+from app.models.lab_case import LabCase
 from app.models.patient import Patient
 from app.models.patient_file import PatientFile
 from app.models.payment import Payment
@@ -242,6 +244,61 @@ def seed_demo() -> None:
             )
             made_files += 1
 
+        # --- lab work (6.6) --------------------------------------------------
+        # Two labs plus a spread of cases that exercises every state the Lab tab
+        # and the dashboard show: overdue, due soon, back-from-lab (undismissed),
+        # already dealt with, and a cancelled one.
+        db.flush()  # make sure the visits above have ids to link against
+
+        labs = [
+            Lab(name="Sri Dental Lab", phone="98800 11223", address="Davangere"),
+            Lab(name="Precision Ceramics", phone="98800 44556", address="Bengaluru"),
+        ]
+        db.add_all(labs)
+        db.flush()
+
+        # Link cases to real visits so the "sent from this sitting" link is true.
+        seeded_visits = list(
+            db.scalars(
+                select(Visit).order_by(Visit.visit_date.desc()).limit(6)
+            ).all()
+        )
+        today = datetime.now(timezone.utc).date()
+        # (days_since_sent, days_until_expected, status, follow_up_done, type)
+        plan = [
+            (12, -4, "sent", False, "crown"),          # overdue by 4 days
+            (9, -1, "sent", False, "bridge"),          # overdue by 1
+            (4, 3, "sent", False, "denture_partial"),  # due in 3 days
+            (2, 6, "sent", False, "veneer"),           # due in 6
+            (14, -6, "received", False, "crown"),      # back, needs calling in
+            (20, -10, "received", True, "study_model"),# back and dealt with
+            (8, -2, "cancelled", False, "inlay_onlay"),# scrapped
+        ]
+        made_lab_cases = 0
+        for i, (sent_ago, due_in, status, done, stype) in enumerate(plan):
+            if not seeded_visits:
+                break
+            visit = seeded_visits[i % len(seeded_visits)]
+            sent_on = today - timedelta(days=sent_ago)
+            db.add(
+                LabCase(
+                    patient_id=visit.patient_id,
+                    lab_id=labs[i % len(labs)].id,
+                    visit_id=visit.id,
+                    appointment_id=visit.appointment_id,
+                    sample_type=stype,
+                    tooth_ref=rng.choice(["36", "11", "46", None]),
+                    sent_date=sent_on,
+                    expected_date=today + timedelta(days=due_in),
+                    received_date=(today + timedelta(days=due_in)) if status == "received" else None,
+                    status=status,
+                    follow_up_done=done,
+                    created_by=dentists[0].id,
+                    notes="Shade A2" if stype in {"crown", "veneer", "bridge"} else None,
+                )
+            )
+            made_lab_cases += 1
+
         # Marker so re-runs are no-ops.
         record_audit(
             db,
@@ -256,6 +313,7 @@ def seed_demo() -> None:
                 "visits": made_visits,
                 "invoices": made_invoices,
                 "files": made_files,
+                "lab_cases": made_lab_cases,
             },
         )
         db.commit()
@@ -263,7 +321,7 @@ def seed_demo() -> None:
     print(
         f"seed_demo: {len(dentists)} dentists, {len(items)} catalogue items, "
         f"{made_appts} appointments, {made_visits} visits, {made_invoices} invoices, "
-        f"{made_files} files. Sign in as the admin to browse."
+        f"{made_files} files, {made_lab_cases} lab cases. Sign in as the admin to browse."
     )
 
 

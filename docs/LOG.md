@@ -38,8 +38,17 @@ done. Next: continue 6.3 demo feedback, then Phase 7 (deploy).**
   `payment`, `patient_file`.
 - **Eight `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
   `billing`, `storage`, `reports`.
-- **239 backend tests pass.** Three seed scripts: `app.seed` (admin), `app.seed_patients` (dev
-  patients), **`app.seed_demo`** (full demo dataset — dentists/appts/visits/invoices/payments/files, 6.3).
+- **264 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
+  **`app.seed_demo`** (full demo dataset incl. lab cases), `app.seed_labs_topup` (a one-off that adds
+  only the 6.6 lab demo rows to a DB seeded before 6.6 — `seed_demo` is marker-guarded).
+- **Migration head = `6b93975ddf46`** (the **14th**, `add lab management`, 6.6).
+- **Fifteen models** — the 6.6 additions are **`lab`** (vendor list) and **`lab_case`**.
+- **Nine `app/services/` modules** — 6.6 added **`lab`**.
+- **Human-readable ids exist now** (6.6): `appointment.number` → shown **`A-1042`**, `lab_case.number`
+  → **`L-1042`**. Both come from Postgres sequences (start 1001); the migration **backfilled** the 25
+  existing appointments. The `A-`/`L-` prefixes are display-only. **Gotcha:** a `number` column needs
+  `server_default=text("nextval(...)")` **on the model**, or SQLAlchemy sends an explicit NULL and the
+  insert fails.
 - **`/staff` now has writes** (6.5): `POST /staff` (create a **name-only** dentist record, admin-only,
   409 on dup email), `POST /staff/{id}/deactivate|activate` (soft, admin-only), `?include_inactive=`.
   Dentists are **records, NOT logins** — the app runs under a shared receptionist login.
@@ -308,6 +317,8 @@ the original step instructions say otherwise:
 | **Payment capture = `POST /invoices/{id}/payments`, status DERIVED, overpayment allowed (5.3)** | — | Recording a payment recomputes `invoice.status` from `sum(payments)` vs `total` (`unpaid`/`partially_paid`/`paid`) — **never client-set**, so status can't drift from the money. **Overpayment is allowed** (sum may exceed total; status caps at `paid`), so `outstanding = max(total - paid, 0)` **floors at 0** while `amount_paid` shows the true sum. **Zero-amount payments allowed** (schema `ge=0`, matching the DB CHECK — NOT `gt=0`). `payment.mode` is a Pydantic `Literal[cash,card,upi]` (unknown → 422; app-level enum, no DB enum). `InvoiceRead` gained `amount_paid`/`outstanding`/`payments[]`. **Money-formatting gotcha:** balance figures are **`.quantize(Decimal("0.01"))`** in `billing.py` — a floored `Decimal("0")` or a `coalesce(sum,0)` serialize as `"0"`, not `"0.00"`, mismatching the Numeric(10,2) columns; the tests caught it. Extended `services/billing.py` (`record_payment`/`_recompute_status`/`invoice_balances`) + the `invoices` router — **no new module, no new router, no migration**. Any-active-staff; audited `action="payment"`, `entity="payment"`, `entity_id=invoice.id`. | `backend/app/services/billing.py`, `backend/app/routers/invoices.py`, `backend/app/schemas/invoice.py` |
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
+| **Lab work: the appointment CLOSES, the lab case tracks the wait (6.6)** | "should the appointment stay open / get a 'waiting on lab' status?" | **No new appointment status.** When a sample goes out the appointment still finishes `done` — that sitting happened, and an appointment is a **calendar slot**, so holding it open for days would make the calendar claim the dentist is busy on a past day; `done`/`cancelled` are also terminal by design and the slot-freeing rules depend on it. The wait lives on `lab_case` (`sent → received`, + `cancelled`), while the **treatment** stays `in_progress` so the patient still appears on the follow-up report. **Don't add a `waiting_on_lab` status** — it was considered and deliberately rejected. Lifecycle is only two working states (user's call, for simplicity); because there's no "fitted" state, **`lab_case.follow_up_done`** is a dismiss flag powering the dashboard's "Back from lab — call the patient in" list, so a returned crown can't sit in a drawer. Lab work is **any-active-staff** (front-desk), not dentist-gated. | `backend/app/models/lab_case.py`, `backend/app/services/lab.py` |
+| **Human-readable ids: `A-1042` / `L-1042` via sequences (6.6)** | everything was a raw UUID | The app had **no readable ids** — unusable when the receptionist must quote a case to a lab on the phone. `appointment.number` + `lab_case.number` are Integers fed by **Postgres sequences** (start 1001); the `A-`/`L-` prefixes are **display-only** (not stored). The migration added `appointment.number` **nullable → backfilled → NOT NULL** (adding NOT NULL to a populated table fails), then `setval` past the max, and `ALTER SEQUENCE ... OWNED BY` so downgrade drops the sequences. **Critical gotcha:** the model column MUST carry `server_default=text("nextval('...')")` — without it SQLAlchemy sends an explicit NULL and every insert fails (this bit, and would have broken appointment booking too). | `backend/alembic/versions/6b93975ddf46_*.py`, `backend/app/models/lab_case.py` |
 | **Dentists are name-only records, not logins — shared-login model (6.5)** | staff_user.id = Supabase UUID; "add dentist" sounds like "create login" | The clinic runs the app under a **single shared receptionist login**; dentists don't each sign in. So `POST /staff` creates a `staff_user` row with a **random local UUID** (name + email as info, role dentist) purely to **assign** on appointments/visits and **attribute** in reports — **no Supabase Auth call, no migration**. This is the exception to "staff_user.id IS the Supabase Auth UUID" (true for the seeded admin who does log in). Soft **deactivate** (never delete — history resolves), admin-only writes. If a dentist ever needs to actually log in, that's a separate Supabase step (out of scope). **Reports break down by dentist** via the visit's primary `dentist_id` (`?dentist_id=` filter + a `by_dentist` block). | `backend/app/routers/staff.py`, `backend/app/services/reports.py` |
 | **Consulting (second) dentist + the view structure + `/staff` (6.3)** | Single `dentist_id`; no add-patient/booking UI; no `/staff` | Dental handoff (dentist A checks, hands treatment to dentist B) → **`consulting_dentist_id` FK on BOTH `appointment` AND `visit`** (nullable/optional; the visit is the permanent record so it's captured there too), migration `19b4e1314059` (13th; **name the FKs by hand** — the unnamed-drop downgrade trap). Labels **Primary dentist / Consulting dentist**. New **`GET /staff?role=`** (any active staff; id/name/roles only) feeds the dentist dropdowns. The app got its missing **views + entry points**: `/patients/new`, `/appointments/new`, quick-action buttons on dashboard/patients/calendar, and a **chairside flow** — day-view **Start visit** (`?appointment=<id>` prefill; appointment id in the query is NOT a patient id, so the no-PII rule holds) → visit form (+ consulting dentist) → **Save & draft invoice** → the 5.2 generate screen. **`app/seed_demo.py`** seeds a full demo dataset (idempotent via an audit marker). No new deps. | `backend/app/models/appointment.py`, `backend/app/models/visit.py`, `backend/app/routers/staff.py`, `frontend/app/appointments/new/`, `frontend/app/patients/new/`, `backend/app/seed_demo.py` |
 | **Patient files: bytes on disk (volume), metadata in DB, storage behind an interface (5.6)** | BUILD_PLAN parked "document/X-ray uploads" in Phase 9 (Optional) | Pulled forward as a **5.6 interlude** (user asked; it's core clinical functionality). **Bytes never touch Postgres** — they go to disk under `UPLOAD_DIR` (a Docker named volume `uploads`), and the DB keeps only metadata + an opaque `storage_key`. All I/O goes through `services/storage.py` (`Storage` protocol + `LocalStorage`), so **Phase 7 swaps in Supabase Storage/S3 by config, not call-site changes** — the "local vs prod differ by config" rule. `patient_file` is **patient-level with an optional `visit_id`** (most files aren't visit-specific; an X-ray is). **Soft-delete** (`archived`), never hard-delete (medico-legal, like patients). Upload/archive = **`require_role("dentist","admin")`** (clinical records are the dentist's, like visits); list/view = any staff. Guards: content-type allowlist (images+PDF → **415**), size cap `MAX_UPLOAD_BYTES` (→ **413**). The `storage_key` is a generated UUID path, never the user's filename (traversal/collision safety). **New dep `python-multipart`** (FastAPI uploads). **This is opaque file storage, NOT charting/odontogram** (still out of scope). Frontend fetches image bytes as **authorized blobs** (the content endpoint needs the token, so a plain `<img src>` won't work). | `backend/app/models/patient_file.py`, `backend/app/services/storage.py`, `backend/app/routers/patient_files.py`, `frontend/app/patients/[id]/patient-files-section.tsx` |
@@ -330,6 +341,79 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-30 — Step 6.6: Lab Management (a new clinical domain)
+
+**Status:** complete — a new **Lab** tab, two tables, the 9th service, two routers, four entry points,
+a dashboard card, Settings > Labs, and demo data. **264 backend tests pass** (+25); lint + build green;
+migration 14 applies/reverses/re-applies; stack up + seeded. **New scope** (not in the original
+BUILD_PLAN), requested by the clinic owner. Built across two checkpoints (backend, then frontend).
+
+### Why
+The clinic sends impressions to outside labs (crowns, bridges, dentures) and the wait was tracked on
+paper and forgotten — the same "walks out the door" failure the follow-up report exists to catch.
+
+### The design decisions (all confirmed with the user, all deliberate)
+1. **The appointment closes normally; the LAB CASE tracks the wait.** No new appointment status. That
+   sitting genuinely happened → `done`. An appointment is a *calendar slot*, so holding it open for
+   five days would make the calendar claim the dentist is busy on a past day — and `done`/`cancelled`
+   are terminal by design (the slot-freeing rules depend on it). The **treatment** stays `in_progress`,
+   so the patient still surfaces on the follow-up report. **The existing status machine is untouched.**
+2. **Readable ids** (`A-1042` / `L-1042`) — the app had none; a UUID can't be read to a lab on the
+   phone. Postgres sequences from 1001, backfilled onto existing appointments.
+3. **Labs are a managed vendor list** (dropdown, not free text) — typo'd names would fragment the data.
+   Deactivate-never-delete, like treatment items.
+4. **Lifecycle is `sent → received` (+ `cancelled`)** — the user chose two working states over adding
+   "fitted", for simplicity.
+5. **Consequence of (4), and its mitigation:** a received case would vanish with nobody reminded to
+   call the patient in. So `follow_up_done` is a plain **dismiss flag** behind the dashboard's "Back
+   from lab — call the patient in" list. A flag, not a state the receptionist must reason about.
+6. **Sample type is a fixed dropdown** + "other"; **any active staff** can send/receive (front-desk
+   work, not a clinical-record write).
+
+### Built — backend (migration 14, `6b93975ddf46`)
+- `models/lab.py`, `models/lab_case.py`; `appointment.number`. Migration hand-edited for: two
+  **sequences**, the **backfill** (add nullable → UPDATE → NOT NULL — adding NOT NULL to a populated
+  table fails otherwise), `setval` past the backfilled max, the `expected_date >= sent_date` **CHECK**,
+  named FKs, and `ALTER SEQUENCE ... OWNED BY` so a downgrade drops the sequences too. Verified
+  **apply → downgrade → re-upgrade**.
+- `services/lab.py` (**9th module**) — create/receive/cancel/dismiss + `lab_dashboard` bucketing
+  (overdue / due-soon / back-from-lab) against **clinic-zone today**.
+- `routers/labs.py` (vendors; admin writes, 409 on duplicate name) and `routers/lab_cases.py`
+  (create/list/`dashboard`/get/received/cancel/follow-up-done). **`/lab-cases/dashboard` is declared
+  before `/{case_id}`** — the literal-before-`{id}` trap.
+- `tests/test_lab.py` — 25 tests. 239 → **264**.
+
+### Built — frontend
+- `lib/use-labs.ts`, `lib/use-lab-cases.ts` (+ `formatCaseNumber`, `duePhrase` → "3 days overdue").
+- **`/lab`** — the tab: filter chips (All / At the lab / Back from lab / Cancelled), a table with
+  L-/A- numbers, overdue rows in red, and **Mark received** / **Cancel** row actions.
+- **`/lab/new`** — a plain page (not a modal, for consistency + deep-linking): patient picker, lab
+  dropdown with **inline "add a new lab"**, sample type, tooth, dates (sent = today, expected = +7),
+  notes. Prefills from `?patient/?visit/?appointment/?name`.
+- **Entry points:** the visit form's **"Save & send to lab"** button (carries visit + appointment +
+  patient), and a **"Send to lab"** link on each calendar day-view row.
+- **Dashboard card** — "Due back" (overdue first, red) + "Back from lab — call the patient in" with a
+  **Done** button. Hides itself entirely when there's nothing due.
+- **Settings > Labs** — list/add/retire (admin). Lab nav item added to the sidebar.
+- `seed_demo.py` extended (+ `seed_labs_topup.py` for already-seeded DBs): 2 labs, 7 cases spanning
+  overdue / due-soon / back-undismissed / back-dismissed / cancelled.
+
+### Bug hit + fixed (worth remembering)
+`number` declared NOT NULL **without `server_default` on the model** → SQLAlchemy sent an explicit
+`NULL` instead of letting the sequence fill it, and every insert failed. It would have broken
+**appointment booking too**, not just lab cases. Fixed on both models; the full suite confirms booking
+still works.
+
+### What was NOT verified by me (honest note)
+The API + service are test-proven and the UI builds/renders. The **click-through is the user's**: send
+a sample from a visit → see it in the Lab tab and on the dashboard → mark it received → watch it move
+to "Back from lab" → dismiss it. Also worth checking Settings > Labs and the calendar's "Send to lab".
+
+### Suggested commit
+`feat: add lab management`
 
 ---
 

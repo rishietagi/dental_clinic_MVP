@@ -77,6 +77,9 @@ export function VisitForm({ patientId }: { patientId: string }) {
   // Which submit button was pressed — a ref, not state, so the submit handler
   // reads the intent set in the same click event (state wouldn't have flushed).
   const draftInvoiceRef = useRef(false);
+  // Same idea for "save, then send a sample to the lab" — the impression is taken
+  // during the sitting, so the lab form is the natural next screen.
+  const sendToLabRef = useRef(false);
   const dentistOptions = dentists.kind === "ready" ? dentists.items : [];
 
   // Which treatment this sitting belongs to: an existing id, or "new".
@@ -255,6 +258,20 @@ export function VisitForm({ patientId }: { patientId: string }) {
     // screen for the visit just recorded. Otherwise back to the profile.
     if (draftInvoiceRef.current) {
       router.push(`/invoices/new/${result.visit.id}`);
+      return;
+    }
+    // "Send to lab" carries the visit + appointment + patient into the lab form, so
+    // the case is linked to the sitting the impression was taken at.
+    if (sendToLabRef.current) {
+      // Read the name off the state (the `patient` const is declared below this
+      // function, so it isn't in scope here).
+      const qs = new URLSearchParams({
+        patient: patientId,
+        name: patientState.kind === "ready" ? patientState.patient.name : "",
+        visit: result.visit.id,
+      });
+      if (appointmentId) qs.set("appointment", appointmentId);
+      router.push(`/lab/new?${qs.toString()}`);
       return;
     }
     router.push(`/patients/${patientId}`);
@@ -598,6 +615,7 @@ export function VisitForm({ patientId }: { patientId: string }) {
               disabled={busy || effectiveChoice === null}
               onClick={() => {
                 draftInvoiceRef.current = false;
+                sendToLabRef.current = false;
               }}
             >
               {busy
@@ -618,9 +636,26 @@ export function VisitForm({ patientId }: { patientId: string }) {
                 disabled={busy || effectiveChoice === null}
                 onClick={() => {
                   draftInvoiceRef.current = true;
+                  sendToLabRef.current = false;
                 }}
               >
                 Save &amp; draft invoice
+              </Button>
+            )}
+
+            {/* Save and go straight to the lab form — for the sitting where an
+                impression was taken. The case comes back linked to this visit. */}
+            {!savedTreatmentId && (
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={busy || effectiveChoice === null}
+                onClick={() => {
+                  draftInvoiceRef.current = false;
+                  sendToLabRef.current = true;
+                }}
+              >
+                Save &amp; send to lab
               </Button>
             )}
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CalendarPlus, UserPlus } from "lucide-react";
 
 import { HealthCard } from "./health-card";
+import { LabDashboardCard } from "./lab-dashboard";
 import { NeedsFollowUp } from "./needs-follow-up";
 import { TodayDashboard } from "./today-dashboard";
 import { TodaysCollections } from "./todays-collections";
@@ -41,6 +42,9 @@ export default function Home() {
       {/* Operational view first: today's schedule, then who needs a follow-up,
           then today's takings. */}
       <TodayDashboard />
+
+      {/* Lab work needing attention — hides itself when there's nothing due. */}
+      <LabDashboardCard />
 
       <div className="grid gap-4 md:grid-cols-2">
         <NeedsFollowUp />

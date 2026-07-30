@@ -197,6 +197,14 @@ export function DayView() {
                           >
                             Start visit →
                           </Link>
+                          {/* Impressions often go out at the appointment itself, so
+                              the send form is reachable straight from the row. */}
+                          <Link
+                            href={`/lab/new?patient=${a.patient_id}&appointment=${a.id}&name=${encodeURIComponent(a.patient_name)}`}
+                            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          >
+                            Send to lab
+                          </Link>
                         </div>
                       </td>
                     </tr>

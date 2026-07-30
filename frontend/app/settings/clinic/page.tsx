@@ -1,4 +1,5 @@
 import { ClinicSettingsForm } from "./clinic-settings-form";
+import { LabsSection } from "./labs-section";
 import { StaffSection } from "./staff-section";
 import { PageHeader } from "@/components/page-header";
 
@@ -13,6 +14,7 @@ export default function ClinicSettingsPage() {
       />
       <ClinicSettingsForm />
       <StaffSection />
+      <LabsSection />
     </div>
   );
 }
