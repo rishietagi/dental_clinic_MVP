@@ -203,6 +203,7 @@ def list_appointments(
     items = [
         AppointmentListItem(
             id=appt.id,
+            number=appt.number,
             patient_id=appt.patient_id,
             patient_name=patient_name,
             dentist_id=appt.dentist_id,

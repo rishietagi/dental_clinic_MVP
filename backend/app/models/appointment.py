@@ -21,7 +21,7 @@ navigation (can be added later without a migration).
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Integer, func
+from sqlalchemy import ForeignKey, Integer, func, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.sqltypes import Text, TIMESTAMP
@@ -35,6 +35,19 @@ class Appointment(Base):
     # Server-generated internal id. Never placed in a URL query string (hard rule).
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+
+    # A short human-readable id (shown as "A-1042"), added in 6.6 alongside lab
+    # cases. The UUID above is unreadable and unsayable — staff need something they
+    # can quote on the phone and match against a lab docket. Fed by a Postgres
+    # sequence created in the migration (which also backfills existing rows).
+    # `server_default` matters: it makes SQLAlchemy omit the column from INSERTs so
+    # the sequence supplies the value, instead of sending an explicit NULL.
+    number: Mapped[int] = mapped_column(
+        Integer,
+        server_default=text("nextval('appointment_number_seq')"),
+        nullable=False,
+        unique=True,
     )
 
     # Always belongs to a patient. First real FK in the schema.

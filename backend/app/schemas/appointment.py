@@ -60,6 +60,8 @@ class AppointmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    # The short readable id, rendered "A-1042" (6.6). Staff can't quote a UUID.
+    number: int
     patient_id: UUID
     treatment_id: UUID | None
     dentist_id: UUID | None
@@ -82,6 +84,7 @@ class AppointmentListItem(BaseModel):
     """
 
     id: UUID
+    number: int  # rendered "A-1042" (6.6)
     patient_id: UUID
     patient_name: str
     dentist_id: UUID | None
