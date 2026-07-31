@@ -114,3 +114,24 @@ export function useMissingVisits(today: string) {
     "appointments",
   );
 }
+
+export type RecallDue = {
+  id: string;
+  name: string;
+  phone: string | null;
+  recall_due: string;
+};
+
+/**
+ * Patients due a routine check-up — Phase 4 of the treatment workflow (6.10).
+ *
+ * A recall is a date on the patient meaning "this person should be booked",
+ * which is repeat revenue a paper diary loses. `withinDays` widens the window
+ * so the front desk can work a week ahead rather than only chasing the overdue.
+ */
+export function useRecallsDue(withinDays = 7) {
+  return useList<RecallDue>(
+    `/patients/recalls-due?within_days=${withinDays}`,
+    "recalls",
+  );
+}

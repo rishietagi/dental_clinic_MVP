@@ -20,6 +20,10 @@
 **Explicitly OUT of scope** (decided, not deferred — do not build these):
 - ~~Prescriptions~~ · ~~Treatment plans (quoted/estimated)~~ · ~~Consent forms~~ · ~~Dental charting / odontogram~~ · ~~Inventory~~ · ~~Lab work tracking~~ · ~~Patient portal / patient logins~~ · ~~Insurance claims~~
 
+> **Three of these were later brought back IN, each at the clinic owner's explicit request:**
+> patient file uploads (5.6), lab work tracking (6.6), and **dental charting / the odontogram
+> (6.11)**. The rest still stand. See §10 and `docs/LOG.md`.
+
 **Rationale:** small tier-2 city clinic, cash-pay, two staff. The above are where big vendors spend their complexity budget and where this project would die before shipping.
 
 ### Two scope notes worth reading
@@ -323,6 +327,8 @@ erDiagram
     PATIENT ||--o{ LAB_CASE : has
     LAB ||--o{ LAB_CASE : fulfils
     VISIT ||--o{ LAB_CASE : "impression from"
+    PATIENT ||--o{ TOOTH_CONDITION : "dental chart"
+    VISIT ||--o{ TOOTH_CONDITION : "found at"
 
     STAFF_USER {
         uuid id PK
@@ -439,6 +445,16 @@ erDiagram
         string status
         bool follow_up_done
     }
+    TOOTH_CONDITION {
+        uuid id PK
+        uuid patient_id FK
+        string tooth
+        string condition
+        string surfaces
+        uuid recorded_visit_id FK
+        timestamp recorded_at
+        timestamp superseded_at
+    }
     AUDIT_LOG {
         uuid id PK
         uuid actor_id
@@ -449,12 +465,15 @@ erDiagram
     }
 ```
 
-> **The ERD above is the target model, kept current.** Three tables joined it after the original
-> plan, all deliberate: `PATIENT_FILE` (the 5.6 uploads interlude — opaque file storage, **not**
-> charting), and `LAB` + `LAB_CASE` (6.6, requested by the clinic owner). `TREATMENT_ITEM.kind`
-> and `STAFF_USER.consultation_fee` came from 6.7 — see §10 and `docs/LOG.md`. Several columns
-> deviate from the first draft on purpose (`PATIENT` stores `date_of_birth`, not a stale `age`;
-> `AUDIT_LOG` has a JSONB `details`); each is recorded in the LOG's standing-decisions table.
+> **The ERD above is the target model, kept current.** Four tables joined it after the original
+> plan, all deliberate and all owner-requested: `PATIENT_FILE` (5.6), `LAB` + `LAB_CASE` (6.6), and
+> **`TOOTH_CONDITION` (6.11 — the dental chart, which reverses §1's "no odontogram" line)**.
+> `TREATMENT_ITEM.kind` and `STAFF_USER.consultation_fee` came from 6.7; `VISIT` gained the OPD
+> card's clinical fields and `TREATMENT` a `phase` in 6.10 (both abridged above — see `docs/LOG.md`).
+> Several columns deviate from the first draft on purpose (`PATIENT` stores `date_of_birth`, not a
+> stale `age`; `AUDIT_LOG` has a JSONB `details`); each is recorded in the LOG's standing-decisions
+> table. **`TOOTH_CONDITION` is append-only** — `superseded_at` marks history, so a tooth's past
+> states are never destroyed.
 
 **Key relationships:**
 - `TREATMENT` threads `VISIT`s together — the heart of the model.
@@ -543,6 +562,8 @@ and executed in Phase 7, once there's something worth deploying.
 | 6.7 | Demo feedback: **Pricing** — Settings "Treatments" becomes **Pricing** with three tabs (**Treatments · Medicine · Consultation fee**), all three pickable when recording a visit. A `kind` column splits the catalogue (`treatment`/`medicine`); the consultation fee is **per-dentist** (`staff_user.consultation_fee`) and bills as a custom line. The §1 "tiny treatment list" decision, extended to everything the clinic actually charges for. | `feat: add pricing for medicines and per-dentist consultation fees` |
 | 6.8 | **Workflow correctness & navigation**, from an end-to-end walkthrough of the real API. Recording a visit now **auto-closes its appointment**; `?patient_id=` on `/invoices` was **silently ignored** (returned every invoice in the clinic) and is fixed; new **"Ready to bill"** + **"Nothing recorded"** dashboard worklists; the patient profile becomes a **header + tabs** (Treatments · Billing · Appointments · Files · Details) with outstanding balance and next appointment; overpayment now **warns** (still allowed). | `fix: close appointments on visit, fix patient filters, add billing worklists` |
 | 6.9 | **Reseed by simulation + E2E verification.** `seed_demo.py` rewritten to walk each patient through the real journey in chronological order rather than filling tables independently — so the demo data cannot contain states the app can't produce. 46 patients across every screen and edge case; a 32-check verification script proves the 6.8 findings fixed and the data self-consistent. | `chore: reseed demo data by simulating the clinic workflow` |
+| 6.10 | **The OPD clinical record.** Driven by the clinic's actual paper out-patient card. The visit gains 18 clinical fields — history, vitals (BP), the seven examination fields, investigations, **provisional/differential/final diagnosis**, referral — plus `V-1042` numbering and a **printable OPD sheet**. `patient` gains guardian/address/`recall_due` (Phase 4 of the treatment workflow, with a dashboard card); `treatment` gains `phase` 1–4. | `feat: record the full OPD clinical record on a visit` |
+| 6.11 | **NEW SCOPE — the dental chart (odontogram).** §1 listed dental charting as explicitly out of scope; the clinic owner asked for a cumulative mouth chart and it is built deliberately (like uploads in 5.6 and lab in 6.6). `tooth_condition` is **append-only** — re-marking a tooth supersedes rather than overwrites, so the pre-treatment state survives as medico-legal history. Permanent **and** deciduous FDI teeth. | `feat: add the dental chart (odontogram)` |
 
 > Milestone: feature-complete on localhost. **Demo it to your mother before deploying** —
 > cheaper to fix now than after real data exists.

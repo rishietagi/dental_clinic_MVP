@@ -44,6 +44,7 @@ from app.models.patient_file import PatientFile
 from app.models.payment import Payment
 from app.models.procedure_performed import ProcedurePerformed
 from app.models.staff_user import StaffUser
+from app.models.tooth_condition import ToothCondition
 from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
 from app.models.visit import Visit
@@ -116,6 +117,17 @@ COMPLAINTS = [
     "Wisdom tooth pain",
 ]
 
+ADDRESSES = [
+    "MCC B Block, Davangere",
+    "Vidyanagar, Davangere",
+    "PJ Extension, Davangere",
+    "Shivaji Nagar, Davangere",
+    "Nittuvalli, Davangere",
+    "Saraswathi Nagar, Davangere",
+    "Ashoka Road, Davangere",
+    "Jayadeva Circle, Harihar",
+]
+
 MEDICAL_NOTES = [
     "Type 2 diabetic — on metformin.",
     "On blood thinners (aspirin). Confirm before extraction.",
@@ -141,6 +153,22 @@ NOTES_BY_PROCEDURE = {
 
 TEETH = ["11", "16", "21", "26", "31", "36", "37", "41", "46", "47"]
 
+# What each procedure is typically done FOR — so the seeded diagnosis and the
+# treatment agree with each other, as they would on a real card.
+DIAGNOSES = {
+    "Root canal treatment": "Chronic irreversible pulpitis {tooth}",
+    "Composite filling": "Dental caries {tooth}",
+    "Extraction": "Grossly decayed {tooth} — non-restorable",
+    "Surgical extraction": "Impacted third molar {tooth}",
+    "Scaling / cleaning": "Chronic generalised gingivitis",
+    "Crown (PFM)": "Post-endodontic restoration {tooth}",
+    "Crown (Zirconia)": "Post-endodontic restoration {tooth}",
+    "Consultation": "Routine examination",
+    "Teeth whitening": "Extrinsic staining",
+    "Fluoride application": "High caries risk — preventive",
+    "Denture (complete, per arch)": "Complete edentulism",
+}
+
 _PNG = b"\x89PNG\r\n\x1a\n" + b"demo-xray-bytes" * 8
 
 
@@ -159,7 +187,7 @@ def reset(db) -> None:
     login) or `clinic_settings` (a singleton pinned by a CHECK).
     """
     for model in (
-        Payment, InvoiceLine, Invoice, LabCase, PatientFile,
+        Payment, InvoiceLine, Invoice, LabCase, PatientFile, ToothCondition,
         ProcedurePerformed, Visit, Appointment, Treatment, Patient,
     ):
         db.execute(delete(model))
@@ -194,10 +222,12 @@ class Clinic:
 
     # -- front desk ----------------------------------------------------------
 
-    def register(self, name, *, phone, dob=None, gender=None, notes=None, archived=False):
+    def register(self, name, *, phone, dob=None, gender=None, notes=None,
+                 archived=False, guardian=None, address=None, recall_due=None):
         p = Patient(
             name=name, phone=phone, date_of_birth=dob, gender=gender,
             medical_notes=notes, archived=archived,
+            guardian_name=guardian, address=address, recall_due=recall_due,
         )
         self.db.add(p)
         self.db.flush()
@@ -249,9 +279,50 @@ class Clinic:
 
     # -- the surgery ---------------------------------------------------------
 
+    def _clinical(self, procedure: str, tooth: str | None) -> dict:
+        """A plausible OPD card for this procedure (6.10).
+
+        Uses the clinic's own shorthand — "NAD" (no abnormality detected),
+        "NRMH" (no relevant medical history) — because that is what the paper
+        cards actually say, and demo data that reads like the real thing is what
+        makes a demo useful.
+        """
+        rng = self.rng
+        dx = DIAGNOSES.get(procedure)
+
+        card: dict = {
+            "history_note": rng.choice(["NRMH", "NRMH", "NRMH", "Diabetic — on metformin",
+                                        "Hypertensive, on medication"]),
+            "habits": rng.choice(["Nil", "Nil", "Tobacco chewing", "Smoking — 5/day"]),
+            "extra_oral": "NAD",
+            "intra_oral": rng.choice(["NAD", "Generalised stains", "Calculus present"]),
+            "soft_tissues": "NAD",
+            "occlusion": rng.choice(["Class I molar relation", "NAD", "Class II div 1"]),
+            "missing_teeth": rng.choice(["Nil", "Nil", "38, 48"]),
+        }
+
+        # BP on roughly half of visits, and reliably before anything surgical.
+        if "xtraction" in procedure or rng.random() < 0.5:
+            systolic = rng.choice([112, 118, 122, 126, 130, 138, 146])
+            card["bp_systolic"] = systolic
+            card["bp_diastolic"] = systolic - rng.choice([38, 42, 46])
+
+        if tooth:
+            card["hard_tissue"] = f"{rng.choice(['Proximal', 'Occlusal', 'Cervical'])} caries {tooth}"
+
+        if dx:
+            card["provisional_diagnosis"] = dx.format(tooth=tooth or "")
+            card["final_diagnosis"] = dx.format(tooth=tooth or "")
+            # X-rays for the work that clinically warrants one.
+            if procedure in ("Root canal treatment", "Extraction", "Surgical extraction"):
+                card["investigations"] = ["iopa"]
+                card["investigation_notes"] = f"IOPA wrt {tooth}" if tooth else "IOPA"
+
+        return card
+
     def treat(self, patient, *, when, procedures, appointment=None, treatment=None,
               title=None, tooth=None, complete=True, dentist=None, consulting=None,
-              complaint=None, notes=None):
+              complaint=None, notes=None, phase=None, clinical=True):
         """Record a sitting. Creates/closes the treatment and CLOSES the
         appointment, mirroring the 6.8 rule so the demo data can never contain
         the "treated but still marked arrived" state the walkthrough found."""
@@ -266,6 +337,9 @@ class Clinic:
             self.db.add(treatment)
             self.db.flush()
 
+        if phase is not None:
+            treatment.phase = phase
+
         who = dentist or self.dentists[0]
         first = procedures[0]
         visit = Visit(
@@ -279,6 +353,11 @@ class Clinic:
             clinical_notes=notes or self.rng.choice(
                 NOTES_BY_PROCEDURE.get(first, ["Treatment carried out as planned."])
             ),
+            # The OPD card (6.10). Filled on most visits but deliberately NOT
+            # all — a real day has quick sittings where only the complaint and
+            # what was done get written down, and the screens must look right
+            # for those too.
+            **(self._clinical(first, tooth) if clinical else {}),
         )
         self.db.add(visit)
         self.db.flush()
@@ -407,6 +486,26 @@ class Clinic:
         self.db.flush()
         return case
 
+    def chart(self, patient, marks, visit=None):
+        """Mark teeth on the patient's chart (6.11).
+
+        `marks` is a list of (tooth, condition) pairs. Seeded directly rather
+        than through the supersede path — this is the patient's chart as it
+        stands today, not a history of corrections.
+        """
+        for tooth, condition in marks:
+            self.db.add(
+                ToothCondition(
+                    patient_id=patient.id,
+                    tooth=tooth,
+                    condition=condition,
+                    surfaces="MOD" if condition in ("caries", "filled") else None,
+                    recorded_visit_id=visit.id if visit else None,
+                    recorded_by=self.actor.id,
+                )
+            )
+        self.db.flush()
+
     def attach_xray(self, patient, visit, caption):
         self.db.add(
             PatientFile(
@@ -499,10 +598,16 @@ def main(do_reset: bool = False) -> None:
                   "Teeth whitening", "Fluoride application", "Consultation"]
         for k in range(12):
             days = 100 - k * 7
+            age = rng.randint(19, 68)
             p = c.register(
-                person(idx), phone=phone(), dob=dob(rng.randint(19, 68)),
+                person(idx), phone=phone(), dob=dob(age),
                 gender=rng.choice(["female", "male"]),
                 notes=rng.choice(MEDICAL_NOTES) if rng.random() < 0.2 else None,
+                address=rng.choice(ADDRESSES),
+                # Completed work earns a recall — Phase 4. Spread across the
+                # next few months, and a couple already overdue so the
+                # dashboard's "due for a check-up" card has content.
+                recall_due=today + timedelta(days=rng.choice([-20, -5, 14, 60, 120, 150])),
             )
             idx += 1
             proc = single[k % len(single)]
@@ -513,7 +618,25 @@ def main(do_reset: bool = False) -> None:
                 p, when=when, procedures=[proc], appointment=appt,
                 title=proc, tooth=rng.choice(TEETH) if proc != "Consultation" else None,
                 complete=True, dentist=dentist,
+                # Finished single-visit work sits in Phase 4 (maintenance).
+                phase=4,
+                # A few quick sittings get only the basics written up, as in life.
+                clinical=k % 5 != 0,
             )
+            # Most adults have some restorative history — a chart that is
+            # entirely blank on every patient would tell us nothing about
+            # whether the screen works.
+            if k % 3 != 2:
+                c.chart(
+                    p,
+                    [
+                        (rng.choice(["16", "26", "36", "46"]), "filled"),
+                        (rng.choice(["17", "27", "37", "47"]), "caries"),
+                        *([("38", "impacted")] if k % 4 == 0 else []),
+                        *([(rng.choice(["18", "28"]), "missing")] if k % 5 == 0 else []),
+                    ],
+                    visit=visit,
+                )
             inv = c.bill(visit, consultation_for=dentist if k % 4 == 0 else None)
             if inv:
                 c.pay(inv, when=when)
@@ -544,6 +667,8 @@ def main(do_reset: bool = False) -> None:
             v1, treatment = c.treat(
                 p, when=w1, procedures=[big, "X-ray (IOPA)"], appointment=a1,
                 title=title, tooth=tooth, complete=False, dentist=dentist,
+                # Sitting 1 of a multi-visit case is disease control (Phase 2).
+                phase=2,
             )
             inv1 = c.bill(v1, consultation_for=dentist)
             if inv1:
@@ -561,6 +686,8 @@ def main(do_reset: bool = False) -> None:
                 p, when=w2, procedures=[big], appointment=a2, treatment=treatment,
                 tooth=tooth, complete=False, dentist=dentist,
                 consulting=dentists[(k + 1) % 2] if k % 3 == 0 else None,
+                # By sitting 2 the case has moved to definitive treatment.
+                phase=3,
             )
             inv2 = c.bill(v2)
             if inv2:
@@ -573,6 +700,17 @@ def main(do_reset: bool = False) -> None:
             # follow-up report.
             c.book(p, at(-(3 + k), rng.choice([10, 11, 15]), 0), dentist=dentist,
                    reason=f"{title} — next sitting", treatment=treatment, status="booked")
+
+            # The tooth under treatment is charted as what it now IS, so the
+            # chart agrees with the clinical record rather than contradicting it.
+            c.chart(
+                p,
+                [
+                    (tooth, "root_canal" if big == "Root canal treatment" else "crown"),
+                    (rng.choice(["15", "25", "35", "45"]), "filled"),
+                ],
+                visit=v1,
+            )
 
             if k < 3:
                 c.attach_xray(p, v1, f"IOPA tooth {tooth} — pre-op")
@@ -676,6 +814,61 @@ def main(do_reset: bool = False) -> None:
         made["appointments"] += 1
         made["visits"] += 1
         made["lab"] += 1
+
+        # ========================================================= PAEDIATRIC
+        # A child in mixed dentition, transcribed from the clinic's own sample
+        # OPD card. Exercises the guardian field, deciduous-era occlusion
+        # terminology, and a fully filled clinical record on one screen.
+        child = c.register(
+            person(idx), phone=phone(), dob=dob(9), gender="male",
+            guardian=f"S/O {rng.choice(FIRST_NAMES)} {rng.choice(SURNAMES)}",
+            address=rng.choice(ADDRESSES),
+            recall_due=today + timedelta(days=90),
+        )
+        idx += 1
+        cw = at(2, 10, 30)
+        capp = c.book(child, cw, dentist=dentists[0], reason="Pain upper left back tooth",
+                      status="arrived")
+        cvisit, ctreatment = c.treat(
+            child, when=cw, procedures=["Root canal treatment", "X-ray (IOPA)"],
+            appointment=capp, title="RCT tooth 26 (paediatric)", tooth="26",
+            complete=False, dentist=dentists[0], phase=2,
+            complaint="Pain in upper left back tooth region since 3 days",
+            notes="Access opening done. Working length measured. Temporary filling placed.",
+            clinical=False,  # set explicitly just below
+        )
+        cvisit.history_note = "NRMH"
+        cvisit.habits = "Nil"
+        cvisit.extra_oral = "NAD"
+        cvisit.intra_oral = "NAD"
+        cvisit.soft_tissues = "NAD"
+        cvisit.hard_tissue = "Proximal caries 26"
+        cvisit.occlusion = "Mesial step terminal plane"
+        cvisit.missing_teeth = "Nil"
+        cvisit.investigations = ["iopa"]
+        cvisit.investigation_notes = "IOPA wrt 26"
+        cvisit.provisional_diagnosis = "Chronic irreversible pulpitis 26"
+        cvisit.differential_diagnosis = "Reversible pulpitis"
+        cvisit.final_diagnosis = "Chronic irreversible pulpitis 26"
+        cvisit.referred_to = "Pedodontics"
+        cvisit.referral_note = "For completion of RCT under behaviour guidance"
+        # Mixed dentition — permanent AND deciduous teeth in one mouth. This is
+        # the case the deciduous half of the chart exists for.
+        c.chart(
+            child,
+            [
+                ("26", "root_canal"),
+                ("16", "caries"),
+                ("55", "filled"),
+                ("75", "caries"),
+                ("84", "missing"),
+            ],
+            visit=cvisit,
+        )
+        db.flush()
+        made["patients"] += 1
+        made["appointments"] += 1
+        made["visits"] += 1
 
         # ============================================================ GROUP F
         # 2 walk-ins (no appointment at all) — a very common real case.

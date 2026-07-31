@@ -29,12 +29,47 @@ export type TreatmentSummary = {
   title: string;
   tooth_ref: string | null;
   status: string;
+  phase: number | null;
   started_at: string;
   closed_at: string | null;
 };
 
-export type Visit = {
+// What can be ordered under "Inv:" on the OPD card (6.10).
+export type Investigation = "iopa" | "opg_conventional" | "opg_digital" | "other";
+
+export const INVESTIGATION_LABELS: Record<Investigation, string> = {
+  iopa: "IOPA",
+  opg_conventional: "OPG (conventional)",
+  opg_digital: "OPG (digital)",
+  other: "Other",
+};
+
+/** The clinic's paper OPD card, field for field (6.10). All optional. */
+export type ClinicalRecord = {
+  history_note: string | null;
+  bp_systolic: number | null;
+  bp_diastolic: number | null;
+  habits: string | null;
+  extra_oral: string | null;
+  intra_oral: string | null;
+  soft_tissues: string | null;
+  hard_tissue: string | null;
+  occlusion: string | null;
+  missing_teeth: string | null;
+  other_findings: string | null;
+  investigations: Investigation[];
+  investigation_notes: string | null;
+  provisional_diagnosis: string | null;
+  differential_diagnosis: string | null;
+  final_diagnosis: string | null;
+  referred_to: string | null;
+  referral_note: string | null;
+};
+
+export type Visit = ClinicalRecord & {
   id: string;
+  // Human-readable OPD number, shown as V-1042.
+  number: number;
   patient_id: string;
   treatment_id: string;
   appointment_id: string | null;
@@ -51,6 +86,11 @@ export type Visit = {
   procedures: ProcedureRead[];
 };
 
+/** Display helper — the visit's readable id, e.g. "V-1042". */
+export function formatVisitNumber(n: number): string {
+  return `V-${n}`;
+}
+
 export type ProcedureInput = {
   treatment_item_id: string;
   tooth_ref?: string | null;
@@ -61,17 +101,18 @@ type TreatmentChoice =
   | { treatment_id: string; treatment?: never }
   | { treatment: { title: string; tooth_ref?: string | null }; treatment_id?: never };
 
-export type VisitCreateBody = TreatmentChoice & {
-  patient_id: string;
-  appointment_id?: string | null;
-  dentist_id?: string | null;
-  consulting_dentist_id?: string | null;
-  visit_date?: string | null;
-  complaint?: string | null;
-  clinical_notes?: string | null;
-  procedures?: ProcedureInput[];
-  treatment_status?: "in_progress" | "completed";
-};
+export type VisitCreateBody = TreatmentChoice &
+  Partial<ClinicalRecord> & {
+    patient_id: string;
+    appointment_id?: string | null;
+    dentist_id?: string | null;
+    consulting_dentist_id?: string | null;
+    visit_date?: string | null;
+    complaint?: string | null;
+    clinical_notes?: string | null;
+    procedures?: ProcedureInput[];
+    treatment_status?: "in_progress" | "completed";
+  };
 
 type Result = { items: Visit[]; total: number };
 

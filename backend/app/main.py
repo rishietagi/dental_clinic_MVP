@@ -7,6 +7,7 @@ from app.config import settings
 from app.routers import (
     appointments,
     auth,
+    chart,
     clinic_settings,
     invoices,
     lab_cases,
@@ -43,6 +44,10 @@ app.include_router(reports.router)
 app.include_router(staff.router)
 app.include_router(labs.router)
 app.include_router(lab_cases.router)
+# The dental chart (6.11). Its paths nest under /patients/{id}/chart, which is a
+# different segment shape from the patients router's /patients/{id}, so there is
+# no shadowing — same arrangement as patient_files.
+app.include_router(chart.router)
 
 
 @app.get("/health")

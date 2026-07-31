@@ -16,6 +16,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -33,17 +34,26 @@ import {
   statusLabel as appointmentStatusLabel,
   statusStyle as appointmentStatusStyle,
 } from "@/lib/appointment-status";
+import { ToothChart } from "@/components/tooth-chart";
+import { useChart } from "@/lib/use-chart";
 import { PatientBillingSection } from "./patient-billing-section";
 import { PatientFilesSection } from "./patient-files-section";
 import { PatientHeader } from "./patient-header";
 import {
   closeTreatment,
   reopenTreatment,
+  setTreatmentPhase,
   usePatientTreatments,
+  PHASE_LABELS,
   type Treatment,
 } from "@/lib/use-treatments";
 import type { MutationResult } from "@/lib/use-treatment-items";
-import { formatVisitDate, usePatientVisits, type Visit } from "@/lib/use-visits";
+import {
+  formatVisitDate,
+  formatVisitNumber,
+  usePatientVisits,
+  type Visit,
+} from "@/lib/use-visits";
 
 export function PatientProfile({ patientId }: { patientId: string }) {
   const state = usePatient(patientId);
@@ -55,6 +65,7 @@ export function PatientProfile({ patientId }: { patientId: string }) {
   const treatments = usePatientTreatments(patientId);
   const visits = usePatientVisits(patientId);
   const appointments = usePatientAppointments(patientId);
+  const chart = useChart(patientId);
   // The header's balance. Summed from this patient's invoices (the ?patient_id=
   // filter that 6.8 made real) rather than a stored total, which would drift.
   const bills = useInvoiceList(undefined, patientId);
@@ -113,6 +124,7 @@ export function PatientProfile({ patientId }: { patientId: string }) {
       <Tabs defaultValue="treatments">
         <TabsList>
           <TabsTrigger value="treatments">Treatments</TabsTrigger>
+          <TabsTrigger value="chart">Chart</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="appointments">Appointments</TabsTrigger>
           <TabsTrigger value="files">Files</TabsTrigger>
@@ -129,6 +141,29 @@ export function PatientProfile({ patientId }: { patientId: string }) {
               visits.refetch();
             }}
           />
+        </TabsContent>
+
+        <TabsContent value="chart">
+          {/* The dental chart (6.11) — the patient's mouth as it stands,
+              built up across visits. Editable by a dentist; the API is the
+              guard either way. */}
+          {chart.kind === "loading" && (
+            <p className="text-sm text-muted-foreground">Loading chart…</p>
+          )}
+          {chart.kind === "error" && (
+            <p className="text-sm text-destructive">
+              Couldn’t load the chart: {chart.message}
+            </p>
+          )}
+          {chart.kind === "ready" && (
+            <ToothChart
+              patientId={patientId}
+              items={chart.items}
+              onChanged={chart.refetch}
+              editable={canManage && !p.archived}
+              patientAge={p.age}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="billing">
@@ -157,6 +192,9 @@ export function PatientProfile({ patientId }: { patientId: string }) {
                 <Field label="Age" value={p.age !== null ? `${p.age}` : null} />
                 <Field label="Date of birth" value={p.date_of_birth} />
                 <Field label="Gender" value={p.gender} />
+                <Field label="Parent / guardian" value={p.guardian_name} />
+                <Field label="Address" value={p.address} />
+                <Field label="Next check-up due" value={p.recall_due} />
                 <Field label="Medical notes" value={p.medical_notes} />
               </dl>
             </CardContent>
@@ -372,6 +410,52 @@ function TreatmentCard({
         <span className="text-xs text-muted-foreground">
           {visits.length} {visits.length === 1 ? "visit" : "visits"}
         </span>
+
+        {/* Which of the four treatment phases this case has reached (6.10).
+            On the treatment, not each visit — the phase describes where the
+            CASE has got to and advances as work progresses. */}
+        {canManage ? (
+          <select
+            value={treatment.phase ?? ""}
+            disabled={busy}
+            onChange={async (e) => {
+              const next = e.target.value === "" ? null : Number(e.target.value);
+              setBusy(true);
+              const result = await setTreatmentPhase(treatment.id, next);
+              setBusy(false);
+              if (result === "ok") {
+                toast.success(
+                  next === null ? "Phase cleared" : `Moved to phase ${next}`,
+                );
+                onChanged();
+              } else {
+                toast.error(
+                  result === "forbidden"
+                    ? "Only a dentist can change the treatment phase."
+                    : typeof result === "object"
+                      ? result.error
+                      : "Could not set the phase.",
+                );
+              }
+            }}
+            className="rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-xs outline-none focus-visible:border-ring"
+            title="Treatment phase"
+          >
+            <option value="">Phase —</option>
+            {[1, 2, 3, 4].map((n) => (
+              <option key={n} value={n}>
+                Phase {n} — {PHASE_LABELS[n]}
+              </option>
+            ))}
+          </select>
+        ) : (
+          treatment.phase !== null && (
+            <span className="text-xs text-muted-foreground">
+              Phase {treatment.phase}
+            </span>
+          )
+        )}
+
         {canManage && (
           <Button
             type="button"
@@ -417,14 +501,22 @@ function VisitRow({ visit }: { visit: Visit }) {
 
   return (
     <li className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0">
-      <span className="text-sm text-muted-foreground">
-        {formatVisitDate(visit.visit_date)}
-        {visit.dentist_name && (
-          <span> · {visit.dentist_name}</span>
-        )}
+      <span className="flex flex-wrap items-center gap-x-1 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">
+          {formatVisitNumber(visit.number)}
+        </span>
+        · {formatVisitDate(visit.visit_date)}
+        {visit.dentist_name && <span> · {visit.dentist_name}</span>}
         {visit.consulting_dentist_name && (
           <span> + {visit.consulting_dentist_name}</span>
         )}
+        {/* The OPD record, laid out like the paper card (6.10). */}
+        <Link
+          href={`/visits/${visit.id}/print`}
+          className="ml-auto text-xs underline hover:text-foreground"
+        >
+          OPD record
+        </Link>
       </span>
       {visit.complaint && visit.complaint.trim() && (
         <p className="text-sm">
@@ -432,6 +524,13 @@ function VisitRow({ visit }: { visit: Visit }) {
           <span className="whitespace-pre-wrap">{visit.complaint}</span>
         </p>
       )}
+      {/* The clinical conclusion, if one was recorded (6.10). */}
+      {visit.final_diagnosis?.trim() || visit.provisional_diagnosis?.trim() ? (
+        <p className="text-sm">
+          <span className="text-muted-foreground">Diagnosis: </span>
+          {visit.final_diagnosis?.trim() || visit.provisional_diagnosis?.trim()}
+        </p>
+      ) : null}
       {visit.clinical_notes && visit.clinical_notes.trim() && (
         <p className="text-sm whitespace-pre-wrap">{visit.clinical_notes}</p>
       )}

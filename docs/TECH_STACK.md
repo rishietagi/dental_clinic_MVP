@@ -132,20 +132,22 @@ computed `age` property). **Four migrations now:** empty root → `add_staff_use
 `add_audit_log` → `add_patient`.
 
 Backend app structure as of 6.9: `app/models/` (**15** ORM models), `app/schemas/` (Pydantic
-request/response contracts), `app/routers/` (`appointments`, `auth`, `clinic_settings`, `invoices`,
-`lab_cases`, `labs`, `patient_files`, `patients`, `reports`, `staff`, `treatment_items`,
-`treatments`, `visits`), `app/services/` (**9** modules: `audit`, `appointments`, `visits`,
-`treatments`, `clinic`, `billing`, `storage`, `reports`, `lab`), three seed scripts
-(`app/seed.py` admin, `app/seed_patients.py` dev patients, `app/seed_demo.py` a full simulated
-demo clinic — stdlib only, no faker), plus `auth.py`/`config.py`/`db.py`. **303 tests.**
+request/response contracts), `app/routers/` (`appointments`, `auth`, `chart`, `clinic_settings`,
+`invoices`, `lab_cases`, `labs`, `patient_files`, `patients`, `reports`, `staff`,
+`treatment_items`, `treatments`, `visits`), `app/services/` (**10** modules: `audit`,
+`appointments`, `visits`, `treatments`, `clinic`, `billing`, `storage`, `reports`, `lab`,
+`chart`), three seed scripts (`app/seed.py` admin, `app/seed_patients.py` dev patients,
+`app/seed_demo.py` a full simulated demo clinic — stdlib only, no faker), plus
+`auth.py`/`config.py`/`db.py`. **355 tests.**
 
-Frontend as of 6.9: **17 routes** — dashboard `/` (today's schedule, collections, and the
-follow-up / ready-to-bill / nothing-recorded / lab worklists), `/calendar` (day + week, drag-drop),
-`/patients` + `/patients/new` + `/patients/[id]` (header with balance and next appointment, over
-Treatments · Billing · Appointments · Files · Details tabs) + `/patients/[id]/visits/new`
-(chairside), `/appointments/new`, `/invoices` + `/invoices/[id]` + `/receipt` +
-`/invoices/new/[visitId]`, `/lab` + `/lab/new`, `/reports`, `/settings/clinic`,
-`/settings/treatments` (Pricing), and `/login`.
+Frontend as of 6.11: **18 routes** — dashboard `/` (today's schedule, collections, and the
+follow-up / ready-to-bill / nothing-recorded / due-for-check-up / lab worklists), `/calendar`
+(day + week, drag-drop), `/patients` + `/patients/new` + `/patients/[id]` (header with balance and
+next appointment, over Treatments · **Chart** · Billing · Appointments · Files · Details tabs) +
+`/patients/[id]/visits/new` (chairside — the full OPD card plus the tooth chart),
+`/appointments/new`, `/invoices` + `/invoices/[id]` + `/receipt` + `/invoices/new/[visitId]`,
+**`/visits/[id]/print`** (the printable OPD sheet), `/lab` + `/lab/new`, `/reports`,
+`/settings/clinic`, `/settings/treatments` (Pricing), and `/login`.
 
 A persistent **app shell** (`components/app-shell.tsx`) wraps every signed-in page with a left
 sidebar, role-aware nav, and theme toggle; `/login` opts out. Data access is one hook module per

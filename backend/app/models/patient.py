@@ -41,6 +41,22 @@ class Patient(Base):
 
     gender: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Parent / guardian ("S/O" on the OPD card, 6.10). Nullable — only paediatric
+    # and dependent patients need one, but for those it is the person who
+    # consents and who the clinic actually phones.
+    guardian_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Free-text address (6.10). One field, not split into lines/city/pin: Indian
+    # addresses don't decompose cleanly and nothing here needs to query them.
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # When this patient is next due a routine check-up (Phase 4 of the treatment
+    # workflow — "every 3 to 6 months"). A plain date, not an appointment: a
+    # recall is a reminder that they SHOULD be booked, which is exactly the
+    # revenue the clinic currently loses track of. The dashboard lists whoever
+    # is due; booking them creates a normal appointment.
+    recall_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     # The one free-text medical field; renders as a banner if non-empty.
     medical_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

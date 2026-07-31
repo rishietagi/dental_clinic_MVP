@@ -22,6 +22,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 import { MedicalNotesBanner } from "@/components/medical-notes-banner";
+import { ToothChart } from "@/components/tooth-chart";
+import { useChart } from "@/lib/use-chart";
+import {
+  ClinicalRecordSection,
+  EMPTY_CLINICAL,
+  toClinicalBody,
+  type ClinicalFields,
+} from "./clinical-record-section";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -76,6 +84,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
   const treatmentItemsState = useTreatmentItems(false, "treatment");
   const medicineItemsState = useTreatmentItems(false, "medicine");
   const dentists = useStaff("dentist");
+  // The dental chart (6.11) — marked chairside while treating.
+  const chart = useChart(patientId);
   const { settings } = useClinicSettings();
   const slotMinutes = settings.slot_minutes;
 
@@ -96,6 +106,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
 
   const [complaint, setComplaint] = useState("");
   const [notes, setNotes] = useState("");
+  // The OPD card's eighteen clinical fields, held as one object (6.10).
+  const [clinical, setClinical] = useState<ClinicalFields>(EMPTY_CLINICAL);
   // Procedures and medicines are the SAME kind of row to the API (both are
   // `procedure_performed` pointing at a catalogue item) but are kept in separate
   // state so each section renders and edits only its own list. They're
@@ -247,6 +259,8 @@ export function VisitForm({ patientId }: { patientId: string }) {
       consulting_dentist_id: consultingId || null,
       complaint: complaint.trim() || null,
       clinical_notes: notes.trim() || null,
+      // The OPD card (6.10) — trimmed, blanks become nulls.
+      ...toClinicalBody(clinical),
       // Both kinds go into the same list — the API stores them identically and
       // the item's own `kind` is what distinguishes them later.
       procedures: [...procedures, ...medicines].filter((p) => p.treatment_item_id),
@@ -509,6 +523,41 @@ export function VisitForm({ patientId }: { patientId: string }) {
                   Set this if a second dentist took over the treatment this sitting.
                 </span>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* --- the OPD card: history, vitals, examination, investigations,
+                 diagnosis, referral (6.10). Ordered as the paper card is, so it
+                 can be transcribed top-to-bottom. --- */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Examination &amp; diagnosis</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ClinicalRecordSection value={clinical} onChange={setClinical} />
+            </CardContent>
+          </Card>
+
+          {/* --- the dental chart (6.11) --- marked while treating, which is
+                 what keeps it current instead of rotting. Saves immediately
+                 (it's the patient's chart, not this form's draft), so it
+                 stands on its own even if the visit isn't saved. --- */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Dental chart</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {chart.kind === "ready" ? (
+                <ToothChart
+                  patientId={patientId}
+                  items={chart.items}
+                  onChanged={chart.refetch}
+                  editable
+                  patientAge={patient.age}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading chart…</p>
+              )}
             </CardContent>
           </Card>
 

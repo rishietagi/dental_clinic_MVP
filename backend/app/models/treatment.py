@@ -33,16 +33,32 @@ schema flexible and avoids a second migration to loosen a constraint later.
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, func
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.sqltypes import Text, TIMESTAMP
 
 from app.models import Base
 
+# The four phases of a course of dental treatment, as the clinic works:
+#   1 Assessment & emergency care   2 Disease control & stabilisation
+#   3 Re-assessment & definitive    4 Maintenance & recall
+PHASE_LABELS = {
+    1: "Assessment & emergency care",
+    2: "Disease control & stabilisation",
+    3: "Re-assessment & definitive treatment",
+    4: "Maintenance & recall",
+}
+
 
 class Treatment(Base):
     __tablename__ = "treatment"
+
+    __table_args__ = (
+        CheckConstraint(
+            "phase IS NULL OR (phase BETWEEN 1 AND 4)", name="ck_treatment_phase_range"
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
@@ -68,6 +84,16 @@ class Treatment(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="in_progress"
     )
+
+    # Which of the four treatment phases this case is currently in (6.10).
+    #
+    # On the TREATMENT, not the visit: a phase describes where the *case* has
+    # got to, and it advances (2 -> 3) as work progresses. Tagging every sitting
+    # would ask the same question repeatedly for an answer that rarely changes.
+    #
+    # Nullable — a walk-in extraction never needs phasing, and demanding it
+    # would make the concept feel like paperwork rather than a planning aid.
+    phase: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()

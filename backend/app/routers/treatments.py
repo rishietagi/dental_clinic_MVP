@@ -35,6 +35,7 @@ from app.schemas.treatment import (
     NeedsFollowUpResponse,
     TreatmentListResponse,
     TreatmentNeedsFollowUp,
+    TreatmentPhaseUpdate,
     TreatmentRead,
 )
 from app.services.audit import record_audit
@@ -229,3 +230,44 @@ def reopen(
     409 if it's already in progress. Clears `closed_at`.
     """
     return _transition(treatment_id, "reopen", reopen_treatment, db, staff)
+
+
+@router.post("/{treatment_id}/phase", response_model=TreatmentRead)
+def set_phase(
+    treatment_id: UUID,
+    body: TreatmentPhaseUpdate,
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(require_role("dentist", "admin")),
+) -> Treatment:
+    """Set which of the four treatment phases this case has reached (6.10).
+
+    1 Assessment & emergency care · 2 Disease control & stabilisation ·
+    3 Re-assessment & definitive treatment · 4 Maintenance & recall.
+    Send `null` to clear it.
+
+    **An action endpoint, not a bare PATCH.** This router deliberately exposes
+    no general replace route — treatments are born from `POST /visits` and only
+    change through named lifecycle actions, and `test_no_create_or_replace_routes`
+    pins that `PATCH /treatments/{id}` stays 405. Phase joins close and reopen as
+    the third such action.
+
+    Unlike those two this is not a state *machine*: a case can move forward,
+    back, or skip a phase, because real treatment plans do. So there is no
+    illegal-transition 409 here — any of 1-4 is allowed from any other.
+    """
+    treatment = _get_or_404(db, treatment_id)
+
+    old = treatment.phase
+    treatment.phase = body.phase
+
+    record_audit(
+        db,
+        actor_id=staff.id,
+        action="phase",
+        entity="treatment",
+        entity_id=treatment.id,
+        details={"from": old, "to": body.phase},
+    )
+    db.commit()
+    db.refresh(treatment)
+    return treatment

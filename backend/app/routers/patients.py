@@ -11,6 +11,7 @@ DELETE — patient records are retained (medico-legal).
 Patient ids travel as PATH params (/patients/{id}), never as query strings.
 """
 
+from datetime import date, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -28,6 +29,8 @@ from app.schemas.patient import (
     PatientListResponse,
     PatientRead,
     PatientUpdate,
+    RecallDueItem,
+    RecallDueResponse,
 )
 from app.services.audit import record_audit
 
@@ -103,6 +106,48 @@ def create_patient(
     db.commit()
     db.refresh(patient)
     return patient
+
+
+@router.get("/recalls-due", response_model=RecallDueResponse)
+def list_recalls_due(
+    within_days: int = Query(
+        default=0,
+        ge=0,
+        le=90,
+        description="Also include recalls falling due within this many days.",
+    ),
+    db: Session = Depends(get_db),
+    staff: StaffUser = Depends(get_current_staff),
+) -> RecallDueResponse:
+    """Patients due (or nearly due) a routine check-up — Phase 4 of the workflow.
+
+    A recall is a plain date on the patient, not an appointment: it means "this
+    person SHOULD be booked", which is exactly the repeat revenue a paper diary
+    loses. Booking them creates a normal appointment; clearing the date takes
+    them off this list.
+
+    Archived patients are excluded — chasing someone who has left the practice
+    is noise. Soonest-overdue first, so the longest-waiting patient is on top.
+
+    **Declared BEFORE `GET /{patient_id}`** or FastAPI parses "recalls-due" as a
+    patient UUID and 422s — the same literal-before-`{id}` discipline as
+    `/treatments/needs-follow-up` (4.8), `/invoices/collections` (5.5),
+    `/lab-cases/dashboard` (6.6) and `/visits/unbilled` (6.8). A test pins it.
+    """
+    cutoff = date.today() + timedelta(days=within_days)
+
+    base = select(Patient).where(
+        Patient.archived.is_(False),
+        Patient.recall_due.is_not(None),
+        Patient.recall_due <= cutoff,
+    )
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = db.scalars(base.order_by(Patient.recall_due, Patient.name)).all()
+
+    return RecallDueResponse(
+        items=[RecallDueItem.model_validate(p) for p in rows],
+        total=total,
+    )
 
 
 @router.get("/{patient_id}", response_model=PatientRead)

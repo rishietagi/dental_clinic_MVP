@@ -20,11 +20,26 @@ export type Treatment = {
   title: string;
   tooth_ref: string | null;
   status: string;
+  // Which of the four treatment phases the case has reached (6.10). Null until
+  // someone sets it — plenty of work never needs phasing.
+  phase: number | null;
   started_at: string;
   closed_at: string | null;
   created_at: string;
   updated_at: string;
 };
+
+// The four phases of a course of dental treatment, as the clinic works.
+export const PHASE_LABELS: Record<number, string> = {
+  1: "Assessment & emergency care",
+  2: "Disease control & stabilisation",
+  3: "Re-assessment & definitive treatment",
+  4: "Maintenance & recall",
+};
+
+export function phaseLabel(phase: number | null): string | null {
+  return phase === null ? null : `Phase ${phase} — ${PHASE_LABELS[phase] ?? ""}`.trim();
+}
 
 type Result = { items: Treatment[]; total: number };
 
@@ -130,6 +145,40 @@ export function closeTreatment(id: string): Promise<MutationResult> {
 
 export function reopenTreatment(id: string): Promise<MutationResult> {
   return transition(id, "reopen");
+}
+
+// Set which of the four treatment phases this case has reached (6.10). Pass
+// null to clear it. Unlike close/reopen this is not a state machine — a case can
+// move forward, back, or skip a phase, so there is no 409 to handle.
+export async function setTreatmentPhase(
+  treatmentId: string,
+  phase: number | null,
+): Promise<MutationResult> {
+  if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
+  try {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return { error: "Not signed in." };
+
+    const res = await fetch(`${apiUrl}/treatments/${treatmentId}/phase`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phase }),
+    });
+
+    if (res.ok) return "ok";
+    if (res.status === 403) return "forbidden";
+    return { error: `Request failed (${res.status}).` };
+  } catch (error: unknown) {
+    return {
+      error: error instanceof Error ? error.message : "Could not set the phase.",
+    };
+  }
 }
 
 // --- needs-follow-up report (step 4.8) --------------------------------------

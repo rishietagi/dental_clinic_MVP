@@ -15,7 +15,7 @@
 // dashboard rather than two empty boxes (the 6.6 lab-card rule).
 
 import Link from "next/link";
-import { IndianRupee, NotebookPen } from "lucide-react";
+import { CalendarClock, IndianRupee, NotebookPen } from "lucide-react";
 
 import { ErrorState } from "@/components/states";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,11 @@ import {
 } from "@/components/ui/table";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { formatVisitDate } from "@/lib/use-visits";
-import { useMissingVisits, useUnbilledVisits } from "@/lib/use-worklists";
+import {
+  useMissingVisits,
+  useRecallsDue,
+  useUnbilledVisits,
+} from "@/lib/use-worklists";
 
 function CardShell({
   title,
@@ -177,6 +181,72 @@ export function NothingRecordedCard() {
           ))}
         </TableBody>
       </Table>
+    </CardShell>
+  );
+}
+
+/** Patients due a routine check-up — Phase 4 of the treatment workflow (6.10). */
+export function DueForCheckUpCard() {
+  // A week's look-ahead: the front desk can work slightly in advance rather than
+  // only ever chasing the already-overdue.
+  const state = useRecallsDue(7);
+
+  if (state.kind === "loading") return null;
+  if (state.kind === "error") return null;
+  if (state.items.length === 0) return null;
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <CardShell
+      title="Due for a check-up"
+      count={state.total}
+      hint="Routine recalls. Book them in — this is repeat work a paper diary loses."
+      icon={<CalendarClock className="size-5 text-muted-foreground" />}
+    >
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Patient</TableHead>
+            <TableHead>Phone</TableHead>
+            <TableHead>Due</TableHead>
+            <TableHead className="text-right">Action</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {state.items.slice(0, 8).map((r) => {
+            const overdue = r.recall_due < today;
+            return (
+              <TableRow key={r.id}>
+                <TableCell className="font-medium">
+                  <Link href={`/patients/${r.id}`} className="hover:underline">
+                    {r.name}
+                  </Link>
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {r.phone ?? "—"}
+                </TableCell>
+                <TableCell className={overdue ? "text-danger" : "text-muted-foreground"}>
+                  {r.recall_due}
+                  {overdue && " · overdue"}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Link href={`/appointments/new?patient=${r.id}`}>
+                    <Button size="xs" variant="outline">
+                      Book
+                    </Button>
+                  </Link>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      {state.total > 8 && (
+        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+          Showing 8 of {state.total}.
+        </p>
+      )}
     </CardShell>
   );
 }

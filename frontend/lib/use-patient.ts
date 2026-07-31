@@ -16,6 +16,11 @@ export type Patient = {
   date_of_birth: string | null;
   age: number | null;
   gender: string | null;
+  // Parent/guardian — "S/O" on the OPD card (6.10). Matters for paediatric cases.
+  guardian_name: string | null;
+  address: string | null;
+  // Next routine check-up (Phase 4 of the treatment workflow).
+  recall_due: string | null;
   medical_notes: string | null;
   archived: boolean;
   created_at: string;

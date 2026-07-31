@@ -12,9 +12,10 @@ so the dashboard can render an actionable, patient-linked row.
 """
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TreatmentRead(BaseModel):
@@ -27,10 +28,30 @@ class TreatmentRead(BaseModel):
     title: str
     tooth_ref: str | None
     status: str
+    # Which of the four treatment phases this case has reached (6.10). Null
+    # until someone sets it — plenty of work never needs phasing.
+    phase: int | None = None
     started_at: datetime
     closed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class TreatmentPhaseUpdate(BaseModel):
+    """Body for `POST /treatments/{id}/phase` (6.10).
+
+    An action endpoint rather than a bare PATCH: the treatments router
+    deliberately exposes no general replace route (a test pins that
+    `PATCH /treatments/{id}` stays 405), because treatments are born from
+    `POST /visits` and only change through named lifecycle actions —
+    close, reopen, and now phase.
+
+    `None` clears the phase; 1-4 set it. Anything else is a 422.
+    """
+
+    phase: Literal[1, 2, 3, 4] | None = Field(
+        default=None, description="1-4, or null to clear."
+    )
 
 
 class TreatmentListResponse(BaseModel):

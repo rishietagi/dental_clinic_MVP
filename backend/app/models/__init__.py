@@ -31,3 +31,4 @@ from app.models.payment import Payment  # noqa: E402,F401
 from app.models.patient_file import PatientFile  # noqa: E402,F401
 from app.models.lab import Lab  # noqa: E402,F401
 from app.models.lab_case import LabCase  # noqa: E402,F401
+from app.models.tooth_condition import ToothCondition  # noqa: E402,F401

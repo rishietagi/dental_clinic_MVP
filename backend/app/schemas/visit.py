@@ -21,6 +21,51 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# What can be ordered under "Inv:" on the OPD card (6.10). A Literal, so an
+# unknown value is a 422 long before it reaches the column — the same choice
+# `treatment_status` and `payment.mode` make.
+Investigation = Literal["iopa", "opg_conventional", "opg_digital", "other"]
+
+
+class ClinicalRecord(BaseModel):
+    """The OPD card's clinical fields, shared by create / update / read (6.10).
+
+    Every field is optional: a routine scaling fills almost none of them, and a
+    form that demands seven findings for a cleaning is one people stop using.
+
+    Free text rather than code lists — dentistry has no vocabulary small enough
+    for these, and the clinic's own shorthand ("NAD", "NRMH") is more useful to
+    them than an enum we invented.
+    """
+
+    # History as at THIS sitting, distinct from patient.medical_notes (standing).
+    history_note: str | None = None
+
+    # Vitals. BP matters chairside — before an extraction or local anaesthetic.
+    bp_systolic: int | None = Field(default=None, ge=50, le=300)
+    bp_diastolic: int | None = Field(default=None, ge=30, le=200)
+
+    # Examination, in the card's order.
+    habits: str | None = None
+    extra_oral: str | None = None
+    intra_oral: str | None = None
+    soft_tissues: str | None = None
+    hard_tissue: str | None = None
+    occlusion: str | None = None
+    missing_teeth: str | None = None
+    other_findings: str | None = None
+
+    investigations: list[Investigation] = Field(default_factory=list)
+    investigation_notes: str | None = None
+
+    # The clinical conclusion — the gap 6.10 exists to close.
+    provisional_diagnosis: str | None = None
+    differential_diagnosis: str | None = None
+    final_diagnosis: str | None = None
+
+    referred_to: str | None = None
+    referral_note: str | None = None
+
 
 class TreatmentStub(BaseModel):
     """The 'start a new thread' block: what work is this, on which tooth."""
@@ -43,11 +88,13 @@ class ProcedureIn(BaseModel):
     )
 
 
-class VisitCreate(BaseModel):
+class VisitCreate(ClinicalRecord):
     """Body for recording a sitting.
 
     Supply EITHER `treatment_id` (continue an existing treatment) OR `treatment`
     (start a new one) — never both, never neither.
+
+    Inherits the OPD card's clinical fields from `ClinicalRecord` (6.10).
     """
 
     patient_id: UUID
@@ -99,18 +146,27 @@ class VisitCreate(BaseModel):
         return self
 
 
-class VisitUpdate(BaseModel):
+class VisitUpdate(ClinicalRecord):
     """Body for editing a recorded visit (PATCH). Every field optional.
 
     Deliberately cannot move a visit to a different treatment or patient: that's
     a data-repair operation, not a clinical edit, and silently re-threading a
     sitting would corrupt the treatment history. Procedures are not edited here
     either — 4.4's screen re-records them if needed.
+
+    The clinical fields are inherited and editable: a diagnosis genuinely does
+    get revised once an X-ray comes back, which is the whole point of having
+    both a provisional and a final one.
     """
 
     complaint: str | None = None
     clinical_notes: str | None = None
     visit_date: datetime | None = None
+    # Inherited `investigations` defaults to [] on the base; on a PATCH that
+    # would wipe the list whenever the caller omits it, so it is re-declared as
+    # None-by-default and the router only applies fields that were actually sent
+    # (`exclude_unset`).
+    investigations: list[Investigation] | None = None
 
 
 class ProcedureRead(BaseModel):
@@ -137,21 +193,25 @@ class TreatmentSummary(BaseModel):
     title: str
     tooth_ref: str | None
     status: str
+    phase: int | None = None
     started_at: datetime
     closed_at: datetime | None
 
 
-class VisitRead(BaseModel):
+class VisitRead(ClinicalRecord):
     """Everything the API returns about one visit.
 
     Includes the treatment summary and the procedures: a sitting read on its own,
     without the thread it belongs to or what was done, isn't a useful clinical
-    record. One GET returns all three.
+    record. One GET returns all three — plus, from 6.10, the OPD card's clinical
+    fields, which the print view renders.
     """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    # Human-readable OPD number, shown as "V-1042".
+    number: int
     patient_id: UUID
     treatment_id: UUID
     appointment_id: UUID | None

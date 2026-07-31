@@ -159,13 +159,15 @@ JSON — which would reject the plain `http://localhost:3000` form in a `.env` f
 
 ## Data access layer
 
-As of 6.9 there are **fifteen models** — `staff_user`, `audit_log`, `patient`, `appointment`,
+As of 6.11 there are **sixteen models** — `staff_user`, `audit_log`, `patient`, `appointment`,
 `treatment_item`, `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`,
-`invoice_line`, `payment`, `patient_file`, `lab`, `lab_case` — and **nine `app/services/` modules**
-(`audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`, `storage`, `reports`, `lab`).
+`invoice_line`, `payment`, `patient_file`, `lab`, `lab_case`, `tooth_condition` — and **ten
+`app/services/` modules** (`audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`,
+`storage`, `reports`, `lab`, `chart`).
 The billing loop is complete (5.2–5.5); 5.6 added patient file uploads; 6.1 added practice reports;
 6.6 added lab management; 6.7 split the catalogue by `kind` and put a consultation fee on the
-dentist; 6.8 added the workflow rules that keep those tables consistent with each other.
+dentist; 6.8 added the workflow rules that keep those tables consistent with each other; 6.10 made
+the visit carry the clinic's whole OPD card; 6.11 added the dental chart.
 
 - **`app/db.py`** — the SQLAlchemy `engine` (a connection pool to Postgres, `pool_pre_ping`
   on so dead pooled connections are replaced not reused), `SessionLocal` (a session =
@@ -578,6 +580,66 @@ All four are query-level or service-level; **no migration**.
 - **`billing.patient_balance()`** sums **per-invoice outstanding** (each already floored at 0), not
   `billed - paid`: otherwise an overpayment on one bill cancels a genuine debt on another and the
   patient looks settled when they are not.
+
+### The visit IS the OPD card (6.10)
+
+The clinic's paper out-patient card carries far more than the app used to: seven examination
+fields, three diagnoses, investigations, vitals, a referral. **Diagnosis had nowhere to live at
+all** — the clinical conclusion of every visit was being discarded. All of it is now nullable
+columns on `visit`, in the card's own order so it can be transcribed top-to-bottom.
+
+- **`investigations` is a Postgres `ARRAY(Text)`**, not a comma-joined string — the same choice
+  `staff_user.roles` makes, and it keeps "how many OPGs this month" a real query.
+- **`visit.number` → `V-1042`**, from a sequence, matching `A-`/`L-` (6.6). The backfill was free
+  here because `nextval()` is *volatile*: Postgres evaluates it per existing row when the NOT NULL
+  column is added, unlike `appointment.number` which needed the add-nullable → UPDATE → SET NOT
+  NULL dance.
+- **`treatment.phase`** (1–4) is set by **`POST /treatments/{id}/phase`**, an action endpoint —
+  the treatments router deliberately exposes no general replace route, and a test pins
+  `PATCH /treatments/{id}` at 405. Unlike close/reopen it is **not** a state machine: real plans
+  move forward, back, or skip a phase, so no transition is illegal.
+- **`patient.recall_due`** is a plain date, not an appointment: it means "this person *should* be
+  booked", which is the repeat revenue a paper diary loses. `GET /patients/recalls-due` feeds a
+  dashboard card; booking them creates a normal appointment.
+
+The form (`clinical-record-section.tsx`, extracted because the visit form was already 1000 lines)
+uses **NAD/NRMH quick-fill chips** and a **collapsible examination**. That is not decoration:
+dentists write that shorthand constantly, and a form demanding seven findings for a scaling is one
+people quietly stop filling in. A print view at `/visits/[id]/print` renders it as the paper card,
+reusing the 5.4 `window.print()` pattern.
+
+### The dental chart is append-only (6.11)
+
+**Scope note:** dental charting was out of scope through Phase 6 and is built here at the clinic
+owner's explicit request — a deliberate reversal, like uploads (5.6) and lab (6.6).
+
+`tooth_condition` rows are **never updated or deleted**. Marking tooth 16 as *filled* when it was
+*caries* stamps `superseded_at` on the old row and inserts a new one:
+
+    current chart = WHERE superseded_at IS NULL
+    tooth history = every row for that tooth, oldest first
+
+The obvious implementation — UPDATE the row — would silently destroy the record of what the mouth
+looked like *before* treatment, which is the one thing a chart exists to prove and the one thing
+that has to survive medico-legally. It also matches every other instinct here: patients archive,
+catalogue items deactivate, the audit log only appends. A **partial index** (`WHERE superseded_at
+IS NULL`) keeps the chart read cheap while unbounded history accumulates behind it.
+
+Two smaller decisions that shape the UI:
+
+- **`sound` is not a stored value.** A healthy tooth is the *absence* of a row, so a new patient
+  starts with an empty chart rather than 32 rows saying "fine" — and "not examined" stays
+  distinguishable from "examined, healthy".
+- **Deciduous teeth (FDI 51–85) are first-class**, not an afterthought. The clinic treats children,
+  and the owner's sample card was a nine-year-old in mixed dentition with both sets in the mouth at
+  once. The chart de-emphasises the set that isn't the working dentition (keyed off the existing
+  `patient.age` property) but never hides it — a retained baby tooth in an adult is exactly the
+  kind of thing worth charting.
+
+Conditions are an app-level `Literal`, no DB enum (the rule since 3.5), so the vocabulary grows
+without a migration. Writes are `require_role("dentist","admin")`, reads any active staff — the
+same split as visits. The chart appears on the profile's **Chart** tab and on the **visit form**,
+so findings are marked while treating, which is what stops it going stale.
 
 ### Demo data is simulated, not inserted (6.9)
 

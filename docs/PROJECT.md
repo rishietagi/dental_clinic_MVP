@@ -17,12 +17,13 @@ performed) · follow-up scheduling from inside the visit · billing & payments �
 basic reports · staff auth with three roles.
 
 **Out of scope** — decided, not deferred. Do not build these: prescriptions · treatment plans
-(quoted/estimated) · consent forms · dental charting / odontogram · inventory · patient portal
-or any patient login · insurance claims.
+(quoted/estimated) · consent forms · inventory · patient portal or any patient login ·
+insurance claims.
 
-Two things that *were* on that list and are now deliberately built, at the clinic owner's
-request: **patient file uploads** (X-rays/photos — opaque file storage, never charting) and
-**lab work tracking**. Do not "correct" them back out.
+Three things that *were* on that list and are now deliberately built, each at the clinic owner's
+explicit request: **patient file uploads** (X-rays/photos), **lab work tracking**, and
+**dental charting / the odontogram** (6.11 — an append-only tooth chart covering permanent and
+deciduous teeth). Do not "correct" them back out.
 
 ## Roles
 
@@ -46,12 +47,12 @@ before Phase 7. See [LOG.md](LOG.md) for the full record and the decisions behin
 
 ### What actually exists
 
-**Backend** (`backend/`) — FastAPI + SQLAlchemy + Alembic, **303 tests**
-- **15 models**: `staff_user`, `audit_log`, `patient`, `appointment`, `treatment`, `visit`,
+**Backend** (`backend/`) — FastAPI + SQLAlchemy + Alembic, **355 tests**
+- **16 models**: `staff_user`, `audit_log`, `patient`, `appointment`, `treatment`, `visit`,
   `procedure_performed`, `treatment_item`, `invoice`, `invoice_line`, `payment`,
-  `clinic_settings`, `patient_file`, `lab`, `lab_case`. 15 migrations.
-- **9 services**: `audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`,
-  `storage`, `reports`, `lab`.
+  `clinic_settings`, `patient_file`, `lab`, `lab_case`, `tooth_condition`. 17 migrations.
+- **10 services**: `audit`, `appointments`, `visits`, `treatments`, `clinic`, `billing`,
+  `storage`, `reports`, `lab`, `chart`.
 - Supabase JWT verification with roles read from **our** `staff_user.roles`; role guards on the
   API, audit logging on mutations.
 - Double-booking prevented by a Postgres **GiST EXCLUDE** constraint — the DB is the guarantee.

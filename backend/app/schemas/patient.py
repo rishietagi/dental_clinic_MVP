@@ -13,6 +13,12 @@ class PatientCreate(BaseModel):
     phone: str | None = None
     date_of_birth: date | None = None
     gender: str | None = None
+    # Parent/guardian — "S/O" on the OPD card (6.10). Matters for paediatric
+    # patients, who are the ones the clinic phones about appointments.
+    guardian_name: str | None = None
+    address: str | None = None
+    # Next routine check-up (Phase 4 of the treatment workflow).
+    recall_due: date | None = None
     medical_notes: str | None = None
 
 
@@ -27,6 +33,9 @@ class PatientUpdate(BaseModel):
     phone: str | None = None
     date_of_birth: date | None = None
     gender: str | None = None
+    guardian_name: str | None = None
+    address: str | None = None
+    recall_due: date | None = None
     medical_notes: str | None = None
 
 
@@ -41,10 +50,34 @@ class PatientRead(BaseModel):
     date_of_birth: date | None
     age: int | None  # computed from date_of_birth by the model's @property
     gender: str | None
+    guardian_name: str | None = None
+    address: str | None = None
+    recall_due: date | None = None
     medical_notes: str | None
     archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class RecallDueItem(BaseModel):
+    """A row of the "due for a check-up" dashboard list (6.10).
+
+    Lighter than `PatientRead` and deliberately WITHOUT medical_notes — the same
+    rule `PatientListItem` follows: sensitive notes are returned by the profile
+    endpoint only, never in a bulk list.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    phone: str | None
+    recall_due: date
+
+
+class RecallDueResponse(BaseModel):
+    items: list[RecallDueItem]
+    total: int
 
 
 class PatientListItem(BaseModel):

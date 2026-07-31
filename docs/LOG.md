@@ -18,7 +18,8 @@ full plan and roadmap), then this file (what actually happened).
 **Where we are: Phases 0–5 COMPLETE (+ the 5.6 uploads interlude). PHASE 6 IN PROGRESS —
 6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo/invoices-ledger/routing/UI-library ·
 6.5 manage dentists + by-dentist analytics · 6.6 Lab Management · 6.7 Pricing (treatments/medicine/
-consultation fees) · 6.8 workflow correctness + navigation · 6.9 reseed by simulation + E2E — all DONE.
+consultation fees) · 6.8 workflow correctness + navigation · 6.9 reseed by simulation + E2E ·
+6.10 the OPD clinical record · 6.11 the dental chart (odontogram) — all DONE.
 Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
 
 > **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
@@ -72,14 +73,25 @@ After changing deps or a migration, **rebuild the image** (`docker compose build
   clinic timezone. The clinical loop works end to end.
 
 **Current facts a new session needs (ONE source of truth — keep this block correct):**
-- **Migration head = `36f29754ba8d`** (the **15th**, `add item kind and consultation fee`, 6.7).
-  Predecessor: `6b93975ddf46` (14th, `add lab management`, 6.6).
-- **Fifteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
+- **Migration head = `d6425ed3d4b5`** (the **17th**, `add tooth condition chart`, 6.11).
+  Predecessor: `516032e0f8c0` (16th, `add clinical record fields`, 6.10).
+- **Sixteen models:** `staff_user`, `audit_log`, `patient`, `appointment`, `treatment_item`,
   `treatment`, `visit`, `procedure_performed`, `clinic_settings`, `invoice`, `invoice_line`,
-  `payment`, `patient_file`, **`lab`**, **`lab_case`**.
-- **Nine `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
-  `billing`, `storage`, `reports`, **`lab`**.
-- **303 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
+  `payment`, `patient_file`, `lab`, `lab_case`, **`tooth_condition`**.
+- **Ten `app/services/` modules:** `audit`, `appointments`, `visits`, `treatments`, `clinic`,
+  `billing`, `storage`, `reports`, `lab`, **`chart`**.
+- **The visit IS the OPD card now** (6.10): 18 clinical fields — history, BP, seven examination
+  fields, `investigations` (a Postgres ARRAY), **provisional/differential/final diagnosis**, and
+  referral — plus `visit.number` shown as **`V-1042`**. `patient` gained `guardian_name`,
+  `address`, `recall_due`; `treatment` gained `phase` (1-4, via **`POST /treatments/{id}/phase`** —
+  NOT a bare PATCH, which stays 405). **`GET /patients/recalls-due`** drives the Phase-4 recall card.
+  Printable OPD sheet at **`/visits/[id]/print`**.
+- **The dental chart exists** (6.11, and it is **IN scope now** — see the scope note below):
+  `tooth_condition` is **append-only** — marking a tooth stamps `superseded_at` on the old row and
+  inserts a new one, so current chart = `superseded_at IS NULL` and the history survives. `sound` is
+  the *absence* of a row, never a stored value. FDI **permanent (11-48) AND deciduous (51-85)** —
+  the clinic treats children. `GET/POST /patients/{id}/chart`, writes dentist/admin.
+- **355 backend tests pass.** Seed scripts: `app.seed` (admin), `app.seed_patients` (dev patients),
   **`app.seed_demo`** — rewritten in 6.9 to **simulate the workflow forward** (a `Clinic` harness
   performing the same actions staff perform, in order, applying the same rules incl. the 6.8
   auto-close), so the demo data cannot contain states the app can't produce. Run
@@ -326,11 +338,11 @@ take effect immediately, without re-issuing tokens.
 - Seed/fake data only until Phase 7. No real patient data on a laptop.
 
 **Out of scope — do not build:** prescriptions · treatment plans (quoted/estimated) · consent
-forms · **dental charting/odontogram** · inventory · patient portal or any patient login ·
-insurance claims. If a task seems to need one, stop and ask.
-**Note:** *patient file uploads* (5.6) and *lab work tracking* (6.6) were originally on this list and
-are now **built**, at the owner's request — don't "correct" them back out. File uploads are opaque
-storage, NOT charting; the odontogram stays out.
+forms · inventory · patient portal or any patient login · insurance claims. If a task seems to
+need one, stop and ask.
+**Note — three things left this list and are now BUILT, each at the owner's explicit request:**
+*patient file uploads* (5.6), *lab work tracking* (6.6), and **dental charting / the odontogram
+(6.11)**. Don't "correct" any of them back out.
 
 **Environment:**
 - Python deps live in the conda env `dental-clinic` (Python 3.12) — **never base, never
@@ -374,6 +386,8 @@ the original step instructions say otherwise:
 | **Design system (6.2): warm/mint tokens, app shell, shared state comps — keep the shadcn token NAMES** | **"Defer polish to Phase 6"** (memory) | The redesign rewrote the `:root`/dark token blocks in `app/globals.css` but **kept shadcn's token names** (`--background`, `--primary`, `--card`, `--accent`, `--destructive`, `--border`, `--ring`, chart/sidebar slots) — so every existing component re-skinned for free; the blast radius was `globals.css` + new shared components, not 25 rewrites. Palette: **mint/teal primary** (`--primary`), warm-sand neutrals, coral secondary, **semantic status tokens** (`--good`/`--warning`/`--danger`, exposed to Tailwind via `@theme inline` so `bg-good`/`text-danger` etc. work) kept **separate from the accent**. **Both themes + a manual toggle:** a pre-paint script in `layout.tsx` stamps `data-theme` + the `.dark` class before first paint (no flash); the toggle reads the DOM stamp as source of truth (NOT effect-set state — the `set-state-in-effect` rule). App shell in `layout.tsx` wraps all signed-in pages; `/login` opts out by pathname. Shared `LoadingState`/`ErrorState`/`EmptyState`/`Skeleton` + `StatusPill` + `PageHeader` replace ad-hoc strings. **No new deps.** | `frontend/app/globals.css`, `frontend/components/app-shell.tsx`, `frontend/components/states/index.tsx`, `frontend/components/ui/status-pill.tsx` |
 | **Reports = `GET /reports` (dentist/admin), clinic-zone buckets, Recharts charts (6.1)** | — | One read bundles three aggregates (revenue trend 6mo, procedure mix 6mo, no-show 30d) so the screen fetches once. **All time bucketing is clinic-zone** (`services/reports.py` reads the tz from `clinic_settings` and builds month/day windows via `clinic_day_bounds`) — money on a day belongs to the clinic's calendar day, not UTC's (the 4.9/5.5 rule, now for reports). Revenue **zero-fills** empty months (no gaps in the line); procedure mix groups `invoice_line` by item (the frozen billed record), orders by revenue, **folds the tail past 8 into "Other"** (dataviz rule); null-item custom lines group under "Other / custom". No-show **denominator excludes cancelled** (a cancellation isn't a no-show); zero appts → rate 0, never a divide-by-zero. **`require_role("dentist","admin")`** (the owner's view, BUILD_PLAN §2 — receptionist 403). Frontend uses **Recharts** (new dep, React-19-compatible) styled to the **dataviz** validated palette (`lib/chart-theme.ts`, light+dark, series-1 blue + status colors); single-series so no legend. No migration/backend dep. | `backend/app/services/reports.py`, `backend/app/routers/reports.py`, `frontend/app/reports/reports-view.tsx`, `frontend/lib/chart-theme.ts` |
 | **Lab work: the appointment CLOSES, the lab case tracks the wait (6.6)** | "should the appointment stay open / get a 'waiting on lab' status?" | **No new appointment status.** When a sample goes out the appointment still finishes `done` — that sitting happened, and an appointment is a **calendar slot**, so holding it open for days would make the calendar claim the dentist is busy on a past day; `done`/`cancelled` are also terminal by design and the slot-freeing rules depend on it. The wait lives on `lab_case` (`sent → received`, + `cancelled`), while the **treatment** stays `in_progress` so the patient still appears on the follow-up report. **Don't add a `waiting_on_lab` status** — it was considered and deliberately rejected. Lifecycle is only two working states (user's call, for simplicity); because there's no "fitted" state, **`lab_case.follow_up_done`** is a dismiss flag powering the dashboard's "Back from lab — call the patient in" list, so a returned crown can't sit in a drawer. Lab work is **any-active-staff** (front-desk), not dentist-gated. | `backend/app/models/lab_case.py`, `backend/app/services/lab.py` |
+| **The odontogram is IN scope as of 6.11 — and the chart is APPEND-ONLY** | `CLAUDE.md`: "dental charting / odontogram — do not build" | The owner asked for a **cumulative mouth chart** after seeing the OPD card work, and chose it over a lighter per-visit findings list when I put both options up. A deliberate reversal, like uploads (5.6) and lab (6.6) — **don't correct it back out.** The model matters as much as the decision: `tooth_condition` rows are **never updated or deleted**. Re-marking a tooth stamps `superseded_at` on the old row and inserts a new one, so `superseded_at IS NULL` is the current chart and everything else is history. An UPDATE would destroy the record of what the mouth looked like *before* treatment — the one thing a chart is for, and medico-legally the one thing that must survive. `sound` is deliberately not a stored value (absence of a row = healthy), so a new patient's chart is empty and "not examined" stays distinct from "examined, healthy". **Deciduous teeth (FDI 51-85) are first-class**: the clinic treats children, and the sample card was a 9-year-old in mixed dentition. Conditions are an app-level `Literal`, no DB enum, so the vocabulary grows without a migration. | `backend/app/models/tooth_condition.py`, `backend/app/services/chart.py`, `frontend/components/tooth-chart.tsx` |
+| **The visit is the OPD card — and `POST /treatments/{id}/phase`, not a PATCH (6.10)** | `visit` had one free-text `clinical_notes` blob | The clinic's paper card carries seven examination fields, three diagnoses, investigations, vitals and a referral. **Diagnosis had nowhere to live at all** — the clinical conclusion of every visit was being dropped. All 18 are nullable free text in the card's own order, so it can be transcribed top-to-bottom; the form uses **NAD/NRMH quick-fill chips** and a collapsible examination, because a form that demands seven findings for a scaling is one people stop filling in. `investigations` is a Postgres `ARRAY(Text)` (the `staff_user.roles` precedent) so "how many OPGs this month" stays a real query. The treatment **phase** is set by an action endpoint — the treatments router deliberately exposes no general replace route (`test_no_create_or_replace_routes` pins `PATCH /{id}` at 405) — and unlike close/reopen it is **not** a state machine, since real plans move forward, back, or skip. | `backend/app/models/visit.py`, `backend/app/routers/treatments.py`, `frontend/app/patients/[id]/visits/new/clinical-record-section.tsx` |
 | **Recording a visit CLOSES its appointment (6.8)** | 3.5 made status a manual, explicit action | Recording the sitting *is* the appointment finishing, so `POST /visits` transitions the appointment to `done` **in the same transaction**. Before this the two were separate and the second was reliably forgotten — every appointment in the dev DB that had a visit was still `arrived`, so the day view claimed patients were in the chair hours after they left. It **walks the `can_transition` machine** rather than assigning the column: `cancelled`/`no_show` stay terminal (a visit against one is a human data-entry problem, not something to paper over) and walk-ins are skipped. **`booked` closes too** — a busy clinic treats without clicking "arrived" — but that relaxation is confined to the auto-close: `POST /appointments/{id}/status` still refuses booked→done (409), pinned by `test_manual_status_endpoint_stays_strict`. | `backend/app/services/visits.py`, `backend/tests/test_workflow.py` |
 | **An undeclared query param is silently DROPPED — assert filters NARROW (6.8)** | — | `GET /invoices?patient_id=` looked like it worked and returned **every invoice in the clinic**, because the param was never declared and FastAPI discards unknown ones. A "patient balance" screen built on it would have shown one patient another's money. Two lessons kept: declare every filter the UI passes, and **test that a filter EXCLUDES the other rows** — a "returns 200" assertion passes against exactly this bug. `patient_id` is now real on `/invoices` and is a third, date-free mode on `/appointments`. | `backend/app/routers/invoices.py`, `backend/app/routers/appointments.py` |
 | **Demo data is SIMULATED forward, not inserted table-by-table (6.9)** | seed scripts filled each table in turn | The old seed produced states the app cannot: appointments `done` with no visit, visits whose appointment was still `arrived`, 31 patients with no history. `seed_demo.py` now runs a `Clinic` harness that performs the same actions staff perform, in chronological order, applying the same rules (including the 6.8 auto-close and the 5.2/5.3 billing rules). **If a state is reachable in the seed it is reachable in the app**, which makes the seed a rough end-to-end test of the domain as well as demo content. Deterministic RNG; `--reset` wipes first. **The GiST no-overlap constraint rejected the first run** (two appointments, one dentist, one slot) — reassuring, and `book()` now walks forward to a free slot like a receptionist would. | `backend/app/seed_demo.py` |
@@ -401,6 +415,97 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-07-31 — Steps 6.10 + 6.11: the OPD clinical record, then the dental chart
+
+**Status:** both complete. **355 backend tests pass** (+52); **42/42 E2E checks pass**; migrations
+**16 (`516032e0f8c0`)** and **17 (`d6425ed3d4b5`)** each apply/reverse/re-apply; lint + build green;
+demo reseeded (47 patients). For commit (two commits below).
+
+### Why — the clinic owner sent her actual paperwork
+Two inputs: the **OPD card** the clinic fills in on paper, and the **four-phase treatment workflow**
+(Assessment → Disease control → Definitive → Maintenance). Mapping the card against the app found
+the record was much thinner than the paper it was replacing:
+
+| OPD card field | App before 6.10 |
+|---|---|
+| Chief complaint | ✅ |
+| Medical/dental/drug/allergy history | ⚠️ patient-level only, nothing per visit |
+| Habits · Extra-oral · Intra-oral · Soft tissues · Hard tissue · Occlusion · Missing teeth | ❌ all collapsed into one `clinical_notes` blob |
+| **Provisional dx · D/D · Final dx** | ❌ **absent entirely — the clinical conclusion had nowhere to live** |
+| Investigations (IOPA / OPG) · REF/Dept · Vitals · Guardian · Address | ❌ |
+
+**A clinical detail that shaped the design:** the sample patient is **9 years old** with *"mesial
+step terminal plane"* — mixed dentition. Anything tooth-related therefore had to cover **deciduous
+teeth (FDI 51–85)**, not just permanent.
+
+### ⚠️ SCOPE REVERSAL — the odontogram is now IN, by the owner's decision
+`CLAUDE.md` listed **dental charting / odontogram** as out of scope. I flagged it before building
+anything and the owner chose the **cumulative mouth chart**. This is a deliberate, owner-requested
+addition — exactly like patient file uploads (5.6) and lab tracking (6.6). **Do not "correct" it
+back out.** `CLAUDE.md`'s out-of-scope list has been updated accordingly.
+
+### 6.10 — the OPD clinical record (migration 16)
+- **18 clinical fields on `visit`**, in the card's order: history, BP, the seven examination
+  fields, `investigations` (a Postgres `ARRAY(Text)` — the `staff_user.roles` precedent, not a
+  comma string), provisional/differential/final **diagnosis**, and referral.
+- **`visit.number` → `V-1042`**, from a sequence, matching `A-`/`L-` (6.6). Here the backfill was
+  free: `nextval()` is *volatile*, so Postgres evaluates it per existing row when the NOT NULL
+  column is added — unlike `appointment.number`, which needed add-nullable → UPDATE → SET NOT NULL.
+- `patient.guardian_name` / `address` / `recall_due`; `treatment.phase` (1–4, CHECKed).
+- **`POST /treatments/{id}/phase`**, not a bare PATCH — `test_no_create_or_replace_routes` pins
+  that `PATCH /treatments/{id}` stays 405, so phase joins close/reopen as a named action. Unlike
+  those it is *not* a state machine: a plan can move forward, back, or skip, so no 409.
+- **`GET /patients/recalls-due`** (+`?within_days=`) behind a **"Due for a check-up"** dashboard card.
+- Frontend: the card extracted to `clinical-record-section.tsx` (the visit form was already 1000
+  lines) with **NAD/NRMH quick-fill chips** and a **collapsible examination** — dentists write that
+  shorthand constantly, and a form demanding seven findings for a scaling is one people abandon.
+  Plus a **printable OPD sheet** at `/visits/[id]/print`, reusing the 5.4 `window.print()` pattern.
+
+### 6.11 — the dental chart (migration 17)
+**`tooth_condition` is append-only.** Marking 16 as *filled* when it was *caries* stamps
+`superseded_at` on the old row and inserts a new one:
+- current chart = `WHERE superseded_at IS NULL` · history = every row for that tooth
+
+An UPDATE would silently destroy the record of what the mouth looked like *before* treatment —
+which is the one thing a chart exists to prove. It also matches every other instinct here
+(patients archive, items deactivate, audit only appends). A **partial index** on the current rows
+keeps the chart read cheap while unbounded history accumulates behind it.
+
+`sound` is deliberately **not** a stored value — a healthy tooth is the *absence* of a row, so a
+new patient starts with an empty chart rather than 32 rows saying "fine", and "not examined" stays
+distinguishable from "examined, healthy". Conditions are an app-level `Literal` (no DB enum), so
+the vocabulary can grow without a migration. Writes are dentist/admin, reads any staff (the 4.3 split).
+
+Frontend `components/tooth-chart.tsx` draws the FDI layout with **deciduous rows nested inside the
+permanent ones**, de-emphasised by `patient.age` but never hidden — a retained baby tooth in an
+adult is exactly what you'd want to chart. Colours come from the 6.2 semantic tokens; no new palette.
+It appears on the profile's **Chart** tab and on the **visit form**, so findings are marked while
+treating, which is what stops the chart rotting.
+
+### Verified
+355 tests (+27 clinical record, +25 chart); both migrations reverse cleanly; the extended E2E
+script now runs **42 checks**, covering the diagnosis, `V-` numbering, phases, recalls, and the
+supersede-keeps-history rule.
+
+### One thing that bit (worth remembering)
+The E2E script appeared to fail on `/patients/recalls-due` and patient creation. Both endpoints
+were fine — I had appended the new checks **after the script's own teardown**, which calls
+`app.dependency_overrides.clear()`, so every later request ran unauthenticated and 401'd. Verified
+against the live API before touching any code. **When a long script suddenly fails a batch of
+unrelated calls, suspect its own teardown before the app.**
+
+### What was NOT verified by me (honest note)
+Every rule above is test- or script-proven and the UI builds. **The click-through is the user's**:
+record a visit filling the card top-to-bottom (watch the NAD chips and the collapsible exam) →
+print the OPD sheet → open the Chart tab → mark a tooth, re-mark it, and confirm the previous
+finding is still readable as history.
+
+### Suggested commits
+6.10: `feat: record the full OPD clinical record on a visit`
+6.11: `feat: add the dental chart (odontogram)`
 
 ---
 
@@ -966,6 +1071,8 @@ BUILD_PLAN *did* account for "document/X-ray uploads" — but only at **Phase 9 
 considers it core, so we pulled it forward as a **5.6 interlude** (numbering kept — Phase 6 reports /
 Phase 7 deploy unchanged; the Phase-9 bullet is removed). **Charting/odontogram stays out of scope** —
 this is opaque file storage, not drawing on teeth.
+*(Superseded: the odontogram was later brought INTO scope by the owner and built in **6.11**. This
+paragraph records what was true in 5.6.)*
 
 ### Scope decisions (confirmed with user)
 - **Build now**, as a 5.6 interlude (not a renumber).

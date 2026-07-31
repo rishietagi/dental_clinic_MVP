@@ -6,7 +6,11 @@ import { LabDashboardCard } from "./lab-dashboard";
 import { NeedsFollowUp } from "./needs-follow-up";
 import { TodayDashboard } from "./today-dashboard";
 import { TodaysCollections } from "./todays-collections";
-import { NothingRecordedCard, ToBillCard } from "./worklists";
+import {
+  DueForCheckUpCard,
+  NothingRecordedCard,
+  ToBillCard,
+} from "./worklists";
 import { PageHeader } from "@/components/page-header";
 
 // The dashboard — the app's home screen. The app shell (components/app-shell.tsx)
@@ -48,6 +52,7 @@ export default function Home() {
           so an up-to-date day shows none of them. Billing first: it's money. */}
       <ToBillCard />
       <NothingRecordedCard />
+      <DueForCheckUpCard />
 
       {/* Lab work needing attention — hides itself when there's nothing due. */}
       <LabDashboardCard />

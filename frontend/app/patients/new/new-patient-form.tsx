@@ -24,6 +24,9 @@ export function NewPatientForm() {
   const [phone, setPhone] = useState("");
   const [dob, setDob] = useState("");
   const [gender, setGender] = useState("");
+  // "S/O" on the OPD card (6.10) — paediatric patients need a guardian.
+  const [guardian, setGuardian] = useState("");
+  const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +44,8 @@ export function NewPatientForm() {
       phone: phone.trim() || null,
       date_of_birth: dob || null,
       gender: gender || null,
+      guardian_name: guardian.trim() || null,
+      address: address.trim() || null,
       medical_notes: notes.trim() || null,
     });
     setBusy(false);
@@ -77,6 +82,16 @@ export function NewPatientForm() {
           </select>
         </Field>
       </div>
+      <Field label="Parent / guardian">
+        <Input
+          value={guardian}
+          onChange={(e) => setGuardian(e.target.value)}
+          placeholder="For a child or dependent patient"
+        />
+      </Field>
+      <Field label="Address">
+        <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+      </Field>
       <Field label="Medical notes">
         <textarea
           value={notes}

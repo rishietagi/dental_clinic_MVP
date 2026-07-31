@@ -38,6 +38,7 @@ from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
 from app.models.visit import Visit
 from app.schemas.visit import (
+    ClinicalRecord,
     ProcedureRead,
     TreatmentSummary,
     UnbilledVisit,
@@ -94,11 +95,19 @@ def _dentist_name(db: Session, dentist_id: UUID | None) -> str | None:
     return who.name if who is not None else None
 
 
+# The OPD card's field names, taken from the schema rather than re-typed here.
+# Copying twenty column names by hand into both the reader and the writer is how
+# a field silently stops being saved; deriving them means adding one to
+# `ClinicalRecord` wires it through both paths automatically (6.10).
+_CLINICAL_FIELDS = tuple(ClinicalRecord.model_fields)
+
+
 def _to_read(db: Session, visit: Visit) -> VisitRead:
     """Assemble the full visit response: the sitting + its thread + what was done."""
     treatment = db.get(Treatment, visit.treatment_id)
     return VisitRead(
         id=visit.id,
+        number=visit.number,
         patient_id=visit.patient_id,
         treatment_id=visit.treatment_id,
         appointment_id=visit.appointment_id,
@@ -113,6 +122,7 @@ def _to_read(db: Session, visit: Visit) -> VisitRead:
         updated_at=visit.updated_at,
         treatment=TreatmentSummary.model_validate(treatment),
         procedures=_load_procedures(db, visit.id),
+        **{f: getattr(visit, f) for f in _CLINICAL_FIELDS},
     )
 
 
@@ -195,6 +205,8 @@ def create_visit(
         consulting_dentist_id=body.consulting_dentist_id,
         complaint=body.complaint,
         clinical_notes=body.clinical_notes,
+        # The OPD card's fields, all optional (6.10).
+        **{f: getattr(body, f) for f in _CLINICAL_FIELDS},
     )
     if body.visit_date is not None:
         visit.visit_date = body.visit_date

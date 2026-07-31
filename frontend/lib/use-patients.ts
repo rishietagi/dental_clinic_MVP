@@ -11,6 +11,9 @@ export type PatientCreateBody = {
   phone?: string | null;
   date_of_birth?: string | null; // YYYY-MM-DD
   gender?: string | null;
+  guardian_name?: string | null;
+  address?: string | null;
+  recall_due?: string | null; // YYYY-MM-DD
   medical_notes?: string | null;
 };
 
