@@ -15,12 +15,34 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: Phases 0–5 COMPLETE (+ the 5.6 uploads interlude). PHASE 6 IN PROGRESS —
-6.1 reports · 6.2 UI redesign · 6.3 usability overhaul · 6.4 logo/invoices-ledger/routing/UI-library ·
-6.5 manage dentists + by-dentist analytics · 6.6 Lab Management · 6.7 Pricing (treatments/medicine/
-consultation fees) · 6.8 workflow correctness + navigation · 6.9 reseed by simulation + E2E ·
-6.10 the OPD clinical record · 6.11 the dental chart (odontogram) — all DONE.
-Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
+**Where we are: PHASES 0–6 COMPLETE.** 6.1 reports · 6.2 UI redesign · 6.3 usability overhaul ·
+6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists + by-dentist analytics ·
+6.6 Lab Management · 6.7 Pricing (treatments/medicine/consultation fees) · 6.8 workflow correctness
++ navigation · 6.9 reseed by simulation + E2E · 6.10 the OPD clinical record · 6.11 the dental
+chart (odontogram). **Everything is committed; the working tree is clean.**
+
+> ### ➡️ NEXT: Step 7.1 — the deployment research spike
+>
+> **This is a writing-and-costing task, not code.** Produce `docs/DEPLOYMENT_OPTIONS.md`
+> comparing, per option, **monthly ₹ · setup hours · maintenance hours/month · restore story**:
+> - **Hosting:** VPS + Docker (Hetzner / DigitalOcean / Lightsail — cheapest, most ops learning)
+>   vs PaaS (Render / Railway / Fly.io — near-zero ops, roughly 2× the cost)
+> - **Postgres:** Supabase vs Neon vs RDS Mumbai — free tiers, egress, India residency
+> - **File storage for the X-rays (5.6):** Supabase Storage vs S3 Mumbai vs a VPS volume.
+>   The app already isolates this behind `services/storage.py` (a `Storage` protocol with
+>   `LocalStorage`), so going live means **writing one cloud backend class + config**, not
+>   touching call sites. Decide it here, alongside the Postgres host.
+>
+> **Two of those decisions are legal, not technical** — data residency for patient records and for
+> clinical images. Worth deciding deliberately for an Indian clinic rather than accepting whatever
+> region a provider defaults to.
+>
+> **Still local-only.** Do not add prod compose, domains, TLS or CI deploy before 7.4–7.6.
+> And note **8.3 (a tested backup restore) gates real patient data** — seed data only until then.
+
+**Before starting Phase 7, check whether the owner has more demo feedback.** Every step from 6.3
+onward came from her using the app, and changing the schema now is a `--reset` away; changing it
+after real patient data exists means writing careful data migrations instead.
 
 > **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
 > from the clinic owner (the user's mother, a practising dentist), so expect more of the same: small
@@ -28,9 +50,18 @@ Next: any further demo feedback, then PHASE 7 (deployment research + go live).**
 
 ### How to run it (do this first)
 
+**Docker Desktop's engine exits between sessions on this machine.** If any `docker` command fails
+with *"cannot find the file specified"* / *"is the daemon running"*, relaunch it and WAIT — the
+engine takes ~30-60s after the process starts:
 ```powershell
-# Docker Desktop's engine exits between sessions on this machine — relaunch it and wait:
-docker info                      # if this fails, start "Docker Desktop" and poll until it succeeds
+Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+```
+```bash
+# then block until it's actually ready (Bash tool; run in background if you have other work)
+until docker info >/dev/null 2>&1; do sleep 3; done; echo "engine up"
+```
+
+```powershell
 cd c:\Users\rishi\Desktop\clinic_MVP
 docker compose up -d             # db + backend + frontend + caddy
 docker compose run --rm backend alembic upgrade head    # only if migrations are pending
@@ -44,6 +75,14 @@ of a step** so they can click through.
 docker compose run --rm -v "${PWD}\backend:/app" backend python -m pytest -q
 docker compose run --rm -v "${PWD}\backend:/app" backend alembic revision --autogenerate -m "msg"
 ```
+**Reseed the demo clinic** (wipes clinical data first — safe, it's all fake):
+```powershell
+docker compose run --rm backend python -m app.seed_demo --reset
+```
+> Tests and any ad-hoc script share the compose DB with the seed, so **tests leave rows behind**.
+> Reseed with `--reset` before judging demo data or running an end-to-end check, or you'll see
+> test artifacts (stray patients, booked slots) and think something is broken.
+
 **Frontend:** `cd frontend; npm run lint; npm run build` (both must be green before a step is done).
 After changing deps or a migration, **rebuild the image** (`docker compose build backend frontend`).
 
