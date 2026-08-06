@@ -38,9 +38,10 @@ person can be both dentist and admin without logging in twice.
 
 ## Current status
 
-- **Phase:** 6 — reports & local polish **(in progress)**. Phases 0–5 complete, plus the 5.6
-  uploads interlude.
-- **Step:** 6.9 done. Next: any further demo feedback, then **Phase 7 — deployment**.
+- **Phase:** 7 — deployment **(in progress)**. Phases 0–6 complete, including the 5.6 uploads
+  interlude, the 6.10 OPD clinical record and the 6.11 dental chart.
+- **Step:** 7.1 done — [`DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) is written. Next: **7.2 —
+  pick a stack and record the decision**.
 
 The app is **feature-complete on localhost** and still **local-only** — no deploy config exists
 before Phase 7. See [LOG.md](LOG.md) for the full record and the decisions behind it.
@@ -161,7 +162,13 @@ added to CI in Phase 7, not before.
 
 ## How to deploy
 
-**Not yet decided, and deliberately so.** Everything through Phase 6 runs locally. Deployment
-is researched and chosen in Phase 7, once there is an application worth sizing; the options
-comparison gets written to `docs/DEPLOYMENT_OPTIONS.md` at that point. Real patient data does
-not enter the system until a backup restore has been tested in Phase 8.3.
+**Researched, not yet decided.** Everything through Phase 6 runs locally, and the app is still
+local-only — no prod compose, domain or TLS exists before step 7.4.
+
+Step 7.1 wrote the options comparison to **[`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md)**:
+hosting, Postgres and file storage costed in ₹ against setup hours, maintenance hours and the
+restore story, priced 2026-08-06. Its recommendation — **a DigitalOcean Bangalore droplet plus
+Supabase Free in Mumbai, ~₹655/month, fully India-resident** — is input to **step 7.2**, which makes
+and records the actual decision.
+
+Real patient data does not enter the system until a backup restore has been tested in **Phase 8.3**.

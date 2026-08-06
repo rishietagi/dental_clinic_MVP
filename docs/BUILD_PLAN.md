@@ -571,7 +571,7 @@ and executed in Phase 7, once there's something worth deploying.
 ### PHASE 7 — Deployment research & go live 🔬
 The research spike you wanted. Do it *here*, with a real app to size.
 
-| 7.1 | **Research spike** — write `docs/DEPLOYMENT_OPTIONS.md` comparing real costs and effort | `docs: add deployment options analysis` |
+| 7.1 | **Research spike — DONE.** [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) compares hosting · Postgres · storage on ₹/mo, setup hours, maintenance hours, restore story. Two owner inputs reshaped it: **images stay manual (no cloud storage at all)** and the clinic sees **~3 patients/day**, which puts a 500 MB free Postgres tier ~10 years out. Result: **India residency is free** (DO Bangalore undercuts Hetzner; Supabase Free has Mumbai), and **Vercel is disqualified — its Hobby plan forbids commercial use.** | `docs: add deployment options analysis` |
 | 7.2 | Pick a stack, document the decision + why | `docs: record deployment decision` |
 | 7.3 | Managed Postgres provisioned (India region if residency matters) | — |
 | 7.4 | `docker-compose.prod.yml` + prod Caddyfile | `feat: add production compose config` |
@@ -638,6 +638,13 @@ WhatsApp reminders + follow-up nudges · recall reminders
 | Domain | ~₹1,000/yr |
 | Sentry / UptimeRobot | free |
 | **Total** | **~₹500–1,200/mo** |
+
+**Verified in 7.1 (priced 2026-08-06) — the estimate holds.** The recommended stack (DigitalOcean
+Bangalore 1 GB + Supabase Free Mumbai + domain) comes to **~₹655/mo**, inside the range and fully
+India-resident. Two caveats [`DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) adds: file storage is
+**₹0** because the clinic keeps images manually, and **managed backups roughly quintuple the bill**
+(Supabase Pro is $25/mo, taking the total to ~₹3,600) — so the free tier's missing backups are a
+real Phase-8 work item, not a saving.
 
 Roughly what BestoSys costs. **The build saves no money.** Its value is the learning and the "in production at a real clinic" line. That's a good reason — just be honest that it's the reason.
 

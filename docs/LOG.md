@@ -15,34 +15,41 @@ full plan and roadmap), then this file (what actually happened).
 > working rules and hard constraints, and the essentials are summarised below as a fallback —
 > but the file itself is the authority.
 
-**Where we are: PHASES 0–6 COMPLETE.** 6.1 reports · 6.2 UI redesign · 6.3 usability overhaul ·
-6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists + by-dentist analytics ·
+**Where we are: PHASES 0–6 COMPLETE, PHASE 7 STARTED.** 6.1 reports · 6.2 UI redesign · 6.3 usability
+overhaul · 6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists + by-dentist analytics ·
 6.6 Lab Management · 6.7 Pricing (treatments/medicine/consultation fees) · 6.8 workflow correctness
 + navigation · 6.9 reseed by simulation + E2E · 6.10 the OPD clinical record · 6.11 the dental
-chart (odontogram). **Everything is committed; the working tree is clean.**
+chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 
-> ### ➡️ NEXT: Step 7.1 — the deployment research spike
+> ### ➡️ NEXT: Step 7.2 — pick a stack and record the decision
 >
-> **This is a writing-and-costing task, not code.** Produce `docs/DEPLOYMENT_OPTIONS.md`
-> comparing, per option, **monthly ₹ · setup hours · maintenance hours/month · restore story**:
-> - **Hosting:** VPS + Docker (Hetzner / DigitalOcean / Lightsail — cheapest, most ops learning)
->   vs PaaS (Render / Railway / Fly.io — near-zero ops, roughly 2× the cost)
-> - **Postgres:** Supabase vs Neon vs RDS Mumbai — free tiers, egress, India residency
-> - **File storage for the X-rays (5.6):** Supabase Storage vs S3 Mumbai vs a VPS volume.
->   The app already isolates this behind `services/storage.py` (a `Storage` protocol with
->   `LocalStorage`), so going live means **writing one cloud backend class + config**, not
->   touching call sites. Decide it here, alongside the Postgres host.
+> **7.1 is DONE** — [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) is written, priced
+> 2026-08-06, every ₹ figure sourced. **Read its §8 (recommendation) and §9 (the decision
+> checklist) — §9 is literally 7.2's agenda.** 7.2 is also writing, not code.
 >
-> **Two of those decisions are legal, not technical** — data residency for patient records and for
-> clinical images. Worth deciding deliberately for an Indian clinic rather than accepting whatever
-> region a provider defaults to.
+> **What 7.1 concluded, in one breath:** two owner inputs shrank the problem — **images stay manual
+> (no cloud file storage at all, ₹0)** and the clinic sees **~3 patients/day**, so at ~55 kB/visit a
+> **500 MB free Postgres tier lasts about ten years**. Capacity therefore costs nothing, and
+> **India residency turns out to be FREE** (DigitalOcean Bangalore ₹570 undercuts Hetzner ₹604, and
+> Supabase Free has a Mumbai region). Recommendation: **DO Bangalore 1 GB + Supabase Free Mumbai ≈
+> ₹655/mo.** Its one weak point is **no managed backups** — that is real Phase-8 work, not a saving.
+>
+> **Three things 7.2 must not re-litigate from scratch** (all researched, with sources in the doc):
+> - **Vercel is disqualified** — the Hobby plan **forbids commercial use** and Vercel may pull a
+>   deployment without notice. The 1M-request headroom was real (we need ~48k/mo); the *terms* are
+>   the blocker. Pro ($20/mo) costs more than a droplet and still doesn't host the FastAPI backend.
+> - **Hetzner and Neon have no Indian region.** Both are eliminated by residency before cost.
+> - **The DPDP Act does NOT mandate localisation** (negative-list model, no list published; DISHA
+>   was never enacted). India residency is a prudential choice, not a legal requirement — it just
+>   happens to also be the cheapest one here.
 >
 > **Still local-only.** Do not add prod compose, domains, TLS or CI deploy before 7.4–7.6.
 > And note **8.3 (a tested backup restore) gates real patient data** — seed data only until then.
 
-**Before starting Phase 7, check whether the owner has more demo feedback.** Every step from 6.3
-onward came from her using the app, and changing the schema now is a `--reset` away; changing it
-after real patient data exists means writing careful data migrations instead.
+**Demo-feedback gate: cleared for now** (asked 2026-08-06, nothing outstanding). Every step from 6.3
+onward came from the owner using the app, so expect more — and changing the schema is still a
+`--reset` away, whereas after real patient data exists it means careful data migrations. **Keep
+asking before each Phase-7 step.**
 
 > **The app is feature-complete on localhost.** Phases 6.3–6.6 were all driven by live demo feedback
 > from the clinic owner (the user's mother, a practising dentist), so expect more of the same: small
@@ -454,6 +461,101 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-08-06 — Step 7.1: the deployment research spike
+
+**Status:** complete. **Docs only — no code, config, compose or CI touched.** Deliverable is
+`docs/DEPLOYMENT_OPTIONS.md`. Ready to commit.
+
+### What it is
+A costing document, not a decision. Hosting · Postgres · file storage, each scored on **monthly ₹ ·
+setup hours · maintenance hours/month · restore story**, with **every ₹ figure carrying a source URL
+and a "priced 2026-08-06" stamp** (the user's call — worth the extra passes, since a costing doc
+whose numbers are vibes is worse than none). One stated FX rate throughout: **$1 = ₹95, €1 = ₹110**.
+The doc's §9 is a checklist that *is* 7.2's agenda.
+
+### Two owner inputs arrived mid-step and rewrote it
+Both came from the clinic owner while the first draft was being written, and both **shrank the
+problem**:
+1. **Images will NOT go to the cloud** — the clinic keeps X-rays manually. The entire file-storage
+   cost line collapses to **₹0**, and one of the three decisions disappears.
+2. **~3 patients/day, 2 logins** — roughly **6× smaller** than the ~20/day a generic estimate
+   assumes.
+
+The first draft had modelled 500 visits/month and concluded a 500 MB free tier was "a 12–18 month
+decision" and that India residency cost **₹1,500–2,000/mo** (because volume forced Supabase Pro).
+**At the real volume both conclusions invert.** This is the lesson worth keeping: *the sizing
+assumption, not the price list, was doing all the work.* Ask the owner for real volumes **before**
+costing anything.
+
+### The findings that matter
+- **Sizing is measured, not guessed** (on the running stack): the four containers idle at **201 MB
+  total** (169 MB without Postgres), images total 1.14 GB, and user data is **2,552 kB for 47
+  patients / 46 visits** → **≈55 kB per visit**. At 75 visits/month that is **~50 MB/year**, so a
+  **500 MB free Postgres tier lasts ~10 years**. **Capacity is not a constraint and nobody should
+  pay for database size here.** Free tiers are ruled in or out by *backup and uptime terms* only.
+- **India residency is FREE — in fact slightly negative.** DigitalOcean Bangalore 1 GB (**₹570**)
+  *undercuts* Hetzner CX23 (**₹604**), and Supabase Free has a **Mumbai** region. There is no
+  longer a trade-off to weigh.
+- **Hetzner has no Indian datacenter** (DE/FI/SG/US) and **Neon has no Mumbai region** (Singapore is
+  closest). Two of the roadmap's named candidates are eliminated by residency before cost.
+- **Hetzner's cheap reputation is out of date** — the **15 June 2026** adjustment took CX23 from
+  €3.99 to €5.49. Reputation-based hosting advice ages badly; this is why the step web-verified.
+- **The DPDP Act 2023 does NOT mandate data localisation.** §16 / Rule 15 permit cross-border
+  transfer **by default** under a *negative list* model, and no list has been published. **DISHA**
+  (which would have regulated health-data storage directly) was **proposed and never enacted**; the
+  EHR Standards 2016 are guidelines. So India residency is **prudential, not legally required** — it
+  just happens to be free here.
+- **The PaaS trap:** these platforms bill **per service** and this app is **two** (frontend +
+  backend) plus a database, so every "$7/mo" headline is really ~$21. **Fly.io is the only PaaS with
+  an Indian region** (`bom`).
+
+### ⛔ Vercel: researched on the owner's request, and disqualified on TERMS
+The instinct was sound on volume — Hobby includes **1M invocations / 100 GB transfer**, and we need
+**~48,000 requests/month** (2 logins × 3 patients/day), about **20× headroom**. It fails anyway:
+1. **The Hobby plan forbids commercial use.** Vercel's terms restrict it to "personal or
+   non-commercial use" and define commercial as any deployment serving "the financial gain of anyone
+   involved". A clinic's patient + billing system is squarely commercial, and Vercel reserves the
+   right to remove a Hobby deployment **without notice**. The failure mode is the clinic going dark
+   on a Tuesday with no appeal — not a bill.
+2. **It hosts half the app.** The backend is a long-running containerised **uvicorn/FastAPI** app
+   with SQLAlchemy pooling and Alembic; that doesn't lift into Vercel functions without a real
+   rearchitecture, breaking the "local and prod differ by **config**, not architecture" rule. You'd
+   still pay to host the backend elsewhere.
+3. **Mumbai (`bom1`) is Pro-only**, so Hobby can't even give residency. Pro is **$20/mo ≈ ₹1,900** —
+   more than a droplet that runs the *whole* stack.
+
+**Don't re-open this in 7.2** unless the plan is Pro *and* a separate backend host.
+
+### Recommendation carried into 7.2 (input, not decision)
+**DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai) ≈ ₹655/mo**, India-resident, on managed
+Postgres, consolidating on the vendor already providing auth. **`BUILD_PLAN.md` §12's ₹500–1,200
+estimate therefore HOLDS** (§12 updated with that note). Two upgrade triggers were written down so
+it doesn't rot: Supabase Pro when the DB passes ~350 MB (~year 7) **or** the first failed `pg_dump`
+restore rehearsal — the second being far likelier.
+
+**The honest weak point:** Supabase Free has **no backups** and **pauses after a week idle** (a
+Diwali closure would lock everyone out on Monday — possibly mitigated by the 8.1 UptimeRobot monitor,
+*unverified*). 8.3 gates real patient data on a tested restore, so a nightly `pg_dump` + off-box copy
++ a rehearsed restore is **real Phase-8 work, not a checkbox**. That is the price of the ₹655.
+
+### Also settled
+**Self-hosting Postgres saves ₹0** against Supabase Free while taking on every backup and upgrade
+obligation — so the `CLAUDE.md` managed-Postgres rule needs no override. It stayed in the doc,
+explicitly flagged, because omitting the cheapest obvious option would have made the comparison
+dishonest.
+
+### Verified / not verified
+Arithmetic re-checked (every conversion, every bundle total); every ₹ traces to a cited, dated URL;
+`git status` confirms only `docs/` + `CLAUDE.md` changed, so the local-only rule held. **Not
+verified by me:** prices are as published on 2026-08-06 — free-tier terms and regional availability
+change, Fly.io's managed-Postgres line is a range, and the UptimeRobot-keeps-Supabase-awake idea is
+reasoning, not a test. Good enough to decide on in 7.2; **confirm before paying in 7.3.**
+
+### Suggested commit
+`docs: add deployment options analysis`
 
 ---
 
