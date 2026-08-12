@@ -81,7 +81,11 @@ export function NewAppointmentForm() {
 
     if (result === "ok") {
       toast.success("Appointment booked");
-      router.push("/calendar");
+      // Land on the calendar for the day we just booked, not today (6.13).
+      // `startLocal` is a datetime-local value ("YYYY-MM-DDTHH:MM") so its date
+      // half is already the clinic-local calendar day the receptionist chose —
+      // no timezone conversion, which is exactly what makes it the right value.
+      router.push(`/calendar?date=${startLocal.slice(0, 10)}`);
       return;
     }
     if (result === "conflict") {

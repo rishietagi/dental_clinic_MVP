@@ -7,6 +7,7 @@
 // patient profile.
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -94,10 +95,22 @@ function StatusActions({
   );
 }
 
+// A YYYY-MM-DD string, or null. Anything else is ignored rather than trusted —
+// a hand-edited URL should fall back to today, not render an empty day.
+function validIsoDate(value: string | null): string | null {
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
 export function DayView() {
   const { settings } = useClinicSettings();
   const tz = settings.timezone;
-  const [date, setDate] = useState<string>(() => todayIso(tz));
+  // `?date=` opens the calendar on a specific day (6.13). Booking an appointment
+  // now lands here on the day it was booked, instead of dumping the receptionist
+  // on today with no sight of what they just did.
+  const params = useSearchParams();
+  const [date, setDate] = useState<string>(
+    () => validIsoDate(params.get("date")) ?? todayIso(tz),
+  );
   const state = useDayAppointments(date);
   const [notice, setNotice] = useState<string | null>(null);
 

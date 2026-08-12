@@ -304,8 +304,27 @@ def test_receptionist_forbidden(db_available):
         s.close()
 
 
-def test_dentist_gets_report_shape(db_available):
+def test_dentist_forbidden(db_available):
+    """A plain dentist login must NOT see the practice's revenue (6.12).
+
+    This is the actual change in 6.12 — reports were dentist+admin from 6.1 until
+    the clinic moved to one login per role. A dentist signing in to record clinical
+    work has no reason to see what the practice earned.
+    """
     staff = _staff(["dentist"])
+    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
+    try:
+        assert client.get("/reports").status_code == 403
+    finally:
+        app.dependency_overrides.clear()
+        s = SessionLocal()
+        s.delete(s.get(StaffUser, staff.id))
+        s.commit()
+        s.close()
+
+
+def test_admin_gets_report_shape(db_available):
+    staff = _staff(["admin"])
     app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
     try:
         resp = client.get("/reports")
@@ -315,6 +334,26 @@ def test_dentist_gets_report_shape(db_available):
         assert len(data["revenue_trend"]) == 6  # default months
         assert set(data["no_show"].keys()) == {"total", "no_show", "done", "cancelled", "rate"}
         assert isinstance(data["by_dentist"], list)
+    finally:
+        app.dependency_overrides.clear()
+        s = SessionLocal()
+        s.delete(s.get(StaffUser, staff.id))
+        s.commit()
+        s.close()
+
+
+def test_owner_holding_both_roles_still_sees_reports(db_available):
+    """The owner is one person who is dentist AND admin (BUILD_PLAN §2).
+
+    `require_role` intersects sets, so holding ["dentist","admin"] must pass even
+    though "dentist" alone is now rejected. This is the case that must not break —
+    it is why roles are a set rather than a single string, and it is what stops her
+    needing two logins.
+    """
+    staff = _staff(["dentist", "admin"])
+    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
+    try:
+        assert client.get("/reports").status_code == 200
     finally:
         app.dependency_overrides.clear()
         s = SessionLocal()

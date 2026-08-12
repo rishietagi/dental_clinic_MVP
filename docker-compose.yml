@@ -26,11 +26,19 @@ services:
       ENVIRONMENT: development
       # Same-origin through Caddy, plus the direct dev port just in case.
       CORS_ORIGINS: http://localhost,http://localhost:3000
-      # Admin to seed into staff_user (python -m app.seed). Project-specific, so
-      # read from the gitignored root .env (see .env.example) — not hardcoded here.
+      # The three staff logins to seed into staff_user (python -m app.seed).
+      # Project-specific, so read from the gitignored root .env (see .env.example)
+      # — not hardcoded here. Admin is required; the other two are optional and
+      # skipped when blank (6.12).
       ADMIN_USER_ID: ${ADMIN_USER_ID:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_NAME: ${ADMIN_NAME:-}
+      DENTIST_USER_ID: ${DENTIST_USER_ID:-}
+      DENTIST_EMAIL: ${DENTIST_EMAIL:-}
+      DENTIST_NAME: ${DENTIST_NAME:-}
+      RECEPTION_USER_ID: ${RECEPTION_USER_ID:-}
+      RECEPTION_EMAIL: ${RECEPTION_EMAIL:-}
+      RECEPTION_NAME: ${RECEPTION_NAME:-}
       # Supabase project URL — the backend derives the JWKS URL + issuer from it
       # to verify access tokens. Same value as NEXT_PUBLIC_SUPABASE_URL.
       SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}

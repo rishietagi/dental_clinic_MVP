@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { CalendarPlus } from "lucide-react";
 
@@ -7,6 +8,9 @@ import { PageHeader } from "@/components/page-header";
 
 // Calendar route. Protected by proxy.ts and by the API (active-staff on the data
 // call). The app shell provides the header/nav/main.
+//
+// Wrapped in Suspense because the day view reads a `?date=` query param
+// (useSearchParams) — the same pattern as /appointments/new and /lab/new.
 export default function CalendarPage() {
   return (
     <div className="flex flex-col gap-6">
@@ -19,7 +23,9 @@ export default function CalendarPage() {
           </Link>
         }
       />
-      <CalendarView />
+      <Suspense fallback={null}>
+        <CalendarView />
+      </Suspense>
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
+import { useCurrentStaff } from "@/lib/use-current-staff";
 import { formatVisitDate } from "@/lib/use-visits";
 import {
   useMissingVisits,
@@ -140,6 +141,14 @@ export function NothingRecordedCard() {
 
   const state = useMissingVisits(today);
 
+  // Recording a visit is dentist/admin on the API, so a receptionist following
+  // "Record now" would land on a form they cannot submit (6.13). The COUNT is
+  // still useful to the front desk — it's what they chase the dentist about — so
+  // the card stays and only the button goes.
+  const staffState = useCurrentStaff();
+  const roles = staffState.kind === "staff" ? staffState.staff.roles : [];
+  const canRecord = roles.includes("dentist") || roles.includes("admin");
+
   if (state.kind === "loading") return null;
   if (state.kind === "error") return null; // a nudge is not worth an error banner
   if (state.items.length === 0) return null;
@@ -148,7 +157,11 @@ export function NothingRecordedCard() {
     <CardShell
       title="Nothing recorded"
       count={state.total}
-      hint="Marked finished today, but no visit was written up."
+      hint={
+        canRecord
+          ? "Marked finished today, but no visit was written up."
+          : "Marked finished today, but no visit was written up. The dentist needs to write these up."
+      }
       icon={<NotebookPen className="size-5 text-muted-foreground" />}
     >
       <Table>
@@ -156,7 +169,7 @@ export function NothingRecordedCard() {
           <TableRow>
             <TableHead>Patient</TableHead>
             <TableHead>Reason</TableHead>
-            <TableHead className="text-right">Action</TableHead>
+            {canRecord && <TableHead className="text-right">Action</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -168,15 +181,17 @@ export function NothingRecordedCard() {
                 </Link>
               </TableCell>
               <TableCell className="text-muted-foreground">{a.reason ?? "—"}</TableCell>
-              <TableCell className="text-right">
-                <Link
-                  href={`/patients/${a.patient_id}/visits/new?appointment=${a.id}`}
-                >
-                  <Button size="xs" variant="outline">
-                    Record now
-                  </Button>
-                </Link>
-              </TableCell>
+              {canRecord && (
+                <TableCell className="text-right">
+                  <Link
+                    href={`/patients/${a.patient_id}/visits/new?appointment=${a.id}`}
+                  >
+                    <Button size="xs" variant="outline">
+                      Record now
+                    </Button>
+                  </Link>
+                </TableCell>
+              )}
             </TableRow>
           ))}
         </TableBody>

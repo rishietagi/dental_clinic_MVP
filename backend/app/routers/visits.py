@@ -162,7 +162,21 @@ def create_visit(
     The schema guarantees exactly one of `treatment_id` / `treatment` was given.
     A single-visit cleaning arrives as a stub + `treatment_status="completed"` and
     comes back as a closed treatment with one visit — one call, nothing dangling.
+
+    An archived patient is refused (6.13) — the same rule patient_files.py has had
+    since 5.6, applied consistently. Unarchive first if they really are back.
     """
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
+        )
+    if patient.archived:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot record a visit for an archived patient.",
+        )
+
     _validate_items(db, body)
 
     try:

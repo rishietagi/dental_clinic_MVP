@@ -1,10 +1,19 @@
 """Practice-report endpoints (step 6.1).
 
 One read, `GET /reports`, bundling the three reports the owner's screen shows —
-revenue trend, procedure mix, no-show rate. **`require_role("dentist","admin")`**:
-reports are the owner's/dentist's view of the practice (BUILD_PLAN §2), not the
-receptionist's — the same split the "Reports" nav item already assumes. Read-only,
-unaudited (like the other read endpoints).
+revenue trend, procedure mix, no-show rate. Read-only, unaudited (like the other
+read endpoints).
+
+**`require_role("admin")` as of 6.12 — narrowed from `("dentist","admin")`.** The
+owner's call: the practice's revenue is the owner's view, and the clinic now runs
+three logins (receptionist / dentist / admin) rather than one shared one. A dentist
+signing in to record clinical work has no reason to see what the practice earned,
+so the dentist role lost this. `staff_user.roles` is a set, so the owner — who is
+both — holds `["dentist","admin"]` and still sees everything under one login.
+
+The companion narrowing is `GET /invoices/collections` (the dashboard's day total),
+which moved to admin at the same time. Per-invoice billing deliberately did **not**
+move: that is front-desk work.
 
 The aggregates live in `services/reports.py`; this router just wires the query
 params and the response.
@@ -37,7 +46,7 @@ def get_reports(
         default=None, description="Optional: narrow the trend/mix/no-show to one dentist."
     ),
     db: Session = Depends(get_db),
-    staff: StaffUser = Depends(require_role("dentist", "admin")),
+    staff: StaffUser = Depends(require_role("admin")),
 ) -> ReportsResponse:
     """Revenue trend (last `months`), procedure mix (last `months`), no-show rate
     (last `days`) — all clinic-timezone-bucketed — plus a per-dentist breakdown.

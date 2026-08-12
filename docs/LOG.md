@@ -21,7 +21,17 @@ overhaul · 6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists +
 + navigation · 6.9 reseed by simulation + E2E · 6.10 the OPD clinical record · 6.11 the dental
 chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 
-> ### ➡️ NEXT: Step 7.3 — provision managed Postgres (Supabase, Mumbai)
+> ### ➡️ NEXT: Step 7.3 — provision managed Postgres (Supabase, Mumbai) + create THREE logins
+>
+> ⚠️ **Read this first: 6.12 and 6.13 were inserted mid-Phase-7** (2026-08-12, owner-requested).
+> The clinic now runs **three role logins**, and **the practice's money is admin-only**:
+> `GET /reports` and `GET /invoices/collections` are `require_role("admin")`. **The dentist role
+> LOST reports** (it had them from 6.1). Per-patient billing deliberately stayed any-active-staff.
+> 6.13 was a full check pass — [`docs/CHECK_REPORT.md`](CHECK_REPORT.md) — which shipped a
+> **permanent E2E harness**: `docker compose run --rm -v "${PWD}\backend:/app" backend python -m
+> scripts.e2e_check` (**75 checks**, creates and deletes its own data). **Run it at the end of every
+> future step** — it is the cheapest regression net the project has, and the two earlier versions of
+> it were throwaways that no longer exist.
 >
 > **7.1 AND 7.2 are DONE — both docs-only.** The stack is **decided**:
 > [`docs/DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) is the record;
@@ -35,6 +45,10 @@ chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 > `BUILD_PLAN.md` §12's ₹500–1,200 estimate. All four owner answers matched 7.1's recommendation.
 >
 > **What 7.3 must actually do:**
+> 0. **Create THREE Supabase login users** (receptionist / dentist / admin, 6.12), copy each UUID
+>    into `.env` as `ADMIN_*` / `DENTIST_*` / `RECEPTION_*`, and run `python -m app.seed` — it
+>    upserts all three `staff_user` rows. `ADMIN_*` is required; the other two are skipped when
+>    blank. The admin holds `["dentist","admin"]` (one person, both roles, one login).
 > 1. **Provision Supabase Postgres in the Mumbai region**, and confirm the free tier's limits at
 >    signup — a pricing page and a signup flow don't always agree.
 > 2. **Find out which region the EXISTING Supabase Auth project is in.** This is the one fact 7.2
@@ -467,6 +481,10 @@ the original step instructions say otherwise:
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
 | **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
 | **Double-booking = GiST EXCLUDE constraint (first hand-written migration)** | — | `appointment_no_overlap` is a Postgres `EXCLUDE USING gist` constraint — the real double-booking guarantee (survives two racing PCs). **First hand-written migration** (autogenerate can't emit EXCLUDE / CREATE EXTENSION); needs the **`btree_gist`** extension. The range must use **immutable** arithmetic: `timestamptz + interval` is only STABLE and Postgres rejects it in a constraint, so we use `tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min*interval '1 min', '[)')`. The service `find_conflicts` pre-check uses the SAME expression (keep them in sync). Excludes `cancelled`; NULL dentist never clashes. | `backend/alembic/versions/feae714ecef5_*.py`, `backend/app/services/appointments.py` |
+| **THREE logins, and the practice's money is ADMIN-ONLY (6.12)** | 6.5: "the clinic runs one shared receptionist login"; 6.1: reports are `require_role("dentist","admin")` | The owner asked for **one account per role** — receptionist / dentist / admin — because "the money-making thing should only be with the admin". So **`GET /reports` narrowed to `require_role("admin")`** and **`GET /invoices/collections`** (the dashboard's day total) moved with it: locking Reports while the day's takings sat on the dashboard would have been theatre. **The dentist role LOST reports.** What deliberately did NOT move: **generating invoices and taking payments stay any-active-staff** — 5.2/5.3 made billing front-desk work, and narrowing it would break the receptionist on day one (`test_receptionist_can_still_bill_end_to_end_after_612` pins exactly this). The three are **SHARED ROLE accounts, not one per person** — every dentist signs in as the same user, and which dentist treated a patient still comes from the dropdown (6.5 unchanged). The **owner holds `["dentist","admin"]`**: `require_role` intersects sets, so she passes an admin-only guard under one login even though `"dentist"` alone no longer does — the canonical reason `roles` is an array. Accounts are created **by hand in the Supabase dashboard** (no service_role key in the app) and seeded by `app/seed.py` from `ADMIN_*` / `DENTIST_*` / `RECEPTION_*`; the last two are optional and skipped when blank. **No migration.** | `backend/app/routers/reports.py`, `backend/app/routers/invoices.py`, `backend/app/seed.py` |
+| **The E2E harness is COMMITTED now — run it every step (6.13)** | 6.9 / 6.11 both cite "32/32" and "42/42 E2E checks" | Both were **throwaway scripts that no longer exist**, so every later step had to rebuild the harness before it could check anything. `backend/scripts/e2e_check.py` is the permanent one: **75 checks** walking one clinic day in order (patient → booking → arrival → chairside + OPD record → chart → second sitting → invoice → payments → lab out/back → recall → the role matrix → soft delete). It **creates its own data and deletes it on the way out** (`--keep` to inspect). **The trap it documents in its own docstring:** clear `app.dependency_overrides` ONCE, in the final `finally` — 6.11 lost an afternoon to checks appended after a mid-script teardown, which silently 401'd and looked like endpoint failures. Run: `docker compose run --rm -v "${PWD}\backend:/app" backend python -m scripts.e2e_check`. | `backend/scripts/e2e_check.py` |
+| **Archived patients refuse NEW activity — appointments and visits, not just files (6.13)** | `patient_files.py` refused uploads for archived patients from 5.6; nothing else did | The check pass found the API happily booking appointments and recording visits for archived patients. The UI already hid those buttons, so it was **latent, not live** — but the failure mode is a patient archived by mistake quietly accumulating appointments. Both now **409**, matching the rule and the wording files has used since 5.6. It is a **soft block, not a dead end**: unarchiving restores normal behaviour, and both the unit test and the E2E assert that. **This is the one 6.13 change that alters API behaviour rather than fixing a defect** — flagged prominently in `CHECK_REPORT.md` so it can be vetoed knowingly. | `backend/app/routers/appointments.py`, `backend/app/routers/visits.py` |
+| **Search terms are ESCAPED before they reach LIKE (6.13)** | — | `%` and `_` are SQL LIKE wildcards. Unescaped, typing **`%`** in the patient search returned **every patient in the clinic**, and **`_`** matched any single character, so a phone search like `98_1` silently matched numbers nobody asked for — with no way for the user to tell the results were wrong. **Not injection** (SQLAlchemy still parameterises the value), just wrong answers from a search box, which at a front desk is its own kind of bug. `_escape_like()` escapes `\` **first** (or it re-escapes the escapes it adds), then `%` and `_`, paired with `ilike(..., escape="\\")`. **Apply the same treatment to any future LIKE search.** | `backend/app/routers/patients.py` |
 | **The deployment stack is B — and the droplet is deliberately STATELESS (7.2)** | `CLAUDE.md`/`TECH_STACK.md`: "Hosting — single VPS or PaaS, decided in Phase 7" | **DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai) ≈ ₹655/mo**, India-resident. The shape matters more than the price: **Postgres is Supabase's**, **images stay manual** (no cloud storage, `LocalStorage` untouched), and **images are built in GitHub Actions** — so the droplet holds **no unique state** and is rebuildable from git + prod compose in about an hour. That is why **DO's backup add-on (~₹114/mo) was declined**, and that decision is **void the moment anything durable lands on its disk**. Managed Postgres means the `CLAUDE.md` rule needs **no override** — self-hosting was costed and saves **₹0** while taking on every backup and upgrade duty. **Vercel was researched and disqualified on TERMS** (Hobby forbids commercial use), not on limits. The accepted weak point is **no managed backups** → real 8.2/8.3 work. | `docs/DEPLOYMENT_DECISION.md` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
@@ -481,6 +499,90 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-08-12 — Steps 6.12 + 6.13: three logins, admin-only money, then the check pass
+
+**Status:** both complete. **362 backend tests pass** (+7); **75/75 E2E checks**; lint + build green;
+demo reseeded (47 patients); **no migration** (head unchanged at `d6425ed3d4b5`). Stack left up.
+For commit (two commits below).
+
+### Why these exist, and why mid-Phase-7
+Two owner requests arrived after 7.2: **three logins with the money behind admin**, and **a full
+check pass**. Both change the app, and Phase 7 is deployment — doing them after go-live would mean
+changing the auth model and the workflow while real staff accounts and real patient records exist.
+So Phase 6 reopened for two steps; **Phase 7 stays purely deployment and resumes at 7.3**.
+
+### 6.12 — what actually changed
+The ask sounded like new machinery and was mostly a **narrowing**: reports were already guarded
+(`require_role("dentist","admin")` since 6.1) and the nav item already hid for receptionists.
+
+**The finding worth keeping:** `/reports` is *not* where the money is most visible.
+**`GET /invoices/collections`** — the dashboard card showing the day's total takings and the
+cash/card/UPI split — was **any-active-staff**. Locking Reports while leaving that on the front
+desk's home screen would have been theatre, so it moved to admin too.
+
+**What deliberately did NOT move:** generating invoices and taking payments. 5.2/5.3 made billing
+front-desk work on purpose, and narrowing it would break the receptionist on day one.
+`test_receptionist_can_still_bill_end_to_end_after_612` exists to stop a future tidy-up doing it.
+
+Three **shared role accounts**, not one per person — attribution stays on the dentist dropdown
+(6.5 unchanged). `app/seed.py` grew from seeding one admin to seeding all three from env vars, with
+the two new ones **optional** so nothing that predates 6.12 breaks; half-configuring a prefix is a
+hard error rather than a guess. **The Supabase users themselves are created in 7.3**, against
+whatever project we land on — building them now would mean building them twice if 7.2's
+recreate-in-Mumbai rule fires.
+
+Frontend: the collections card splits into a role-checking outer component and a fetching inner one
+(hooks can't be called conditionally), and `/reports` gained a **calm "not for this login" state**
+rather than a red error — a receptionist landing there is the guard working, not a fault.
+
+### 6.13 — the check pass
+Full walkthrough across all three roles. Findings in [`CHECK_REPORT.md`](CHECK_REPORT.md).
+**Most of the app was already right** — the GiST double-booking constraint, visit auto-close, the
+append-only chart surviving a re-mark, exact money, filters that narrow, deactivated dentists
+dropping out of dropdowns, invalid FDI numbers rejected. Four real findings, all fixed:
+
+1. **LIKE-wildcard injection in patient search** — typing `%` returned every patient; `_` matched
+   any character. Escaped now (see the standing-decision row).
+2. **Archived patients accepted new appointments and visits** — `patient_files.py` had refused this
+   since 5.6; the two more important resources never got the rule. Now 409, reversible by
+   unarchiving. **The one change that alters API behaviour rather than fixing a defect.**
+3. **Booking dropped you on today's calendar**, not the day you booked — so you could not see what
+   you had just done. `/calendar?date=` now exists and booking redirects to it. The date comes from
+   the `datetime-local` input's own value, so it is already the clinic-local day the user picked —
+   no timezone conversion, which is what makes it right.
+4. **A receptionist dead end**: the dashboard's "Nothing recorded" card offered a "Record now"
+   button leading to a form that role cannot submit. **6.12 caused this** — the old shared login was
+   effectively dentist+admin and always could. The button is hidden; the card stays, because the
+   count is exactly what the front desk chases the dentist about.
+
+### The lasting deliverable
+**`backend/scripts/e2e_check.py` is committed.** The "32/32" and "42/42" checks cited in the 6.9 and
+6.11 entries were **throwaway scripts that no longer existed** — every step since paid to rebuild
+the harness before it could check anything. This one is permanent, self-cleaning, and documents in
+its own docstring the trap that cost 6.11 an afternoon (clear `dependency_overrides` **once**, at
+the very end). **Run it at the end of every future step.**
+
+### Two things that bit, both mine
+- The first E2E run failed three chart checks and then crashed in cleanup. **The app was fine both
+  times**: chart POST returns **201** not 200, the condition vocabulary is `root_canal` not
+  `root_canal_treated` (a `Literal`, so a wrong name is a 422, not a silent no-op), and my teardown
+  deleted appointments before the visits referencing them.
+- My first wildcard test asserted `q="%"` returns **0** patients. It returned 2 — correctly, because
+  two patients genuinely had `%` in their names. **On a shared test DB an absolute count is a flake
+  waiting to happen**; the assertion is now relative to the unfiltered total.
+
+### Verified / not verified
+**Verified:** 362 tests (+7); 75/75 E2E checks; lint + build green; role behaviour proven at the
+**API** with real 403s, not just hidden nav. **Not verified by me:** the browser sign-in for three
+real accounts — those users don't exist until 7.3, so every role check here runs through
+`dependency_overrides`. The click-through is the user's.
+
+### Suggested commits
+`feat: restrict reports and collections to admin, seed three role logins`
+`fix: usability and workflow fixes from the end-to-end check pass`
 
 ---
 

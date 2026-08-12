@@ -40,15 +40,22 @@
 
 ## 2. Roles
 
-Three roles. Staff-only — no patient access.
+Three roles. Staff-only — no patient access. **Three logins as of 6.12**, one per role.
 
 | Role | Who | Access |
 |---|---|---|
-| **Receptionist** | Front-desk staff | Register/edit patients, book/reschedule/cancel appointments, check-in, **schedule follow-ups**, create invoices, take payments, view today's dashboard |
-| **Dentist** | Your mother | Everything Receptionist can do, **plus** record visits/treatments, close or continue a treatment, **schedule follow-ups from the visit screen**, view reports |
-| **Admin** | Your mother (same login) | Everything, **plus** manage staff logins, edit treatment list, clinic settings |
+| **Receptionist** | Front-desk staff | Register/edit patients, book/reschedule/cancel appointments, check-in, **schedule follow-ups**, create invoices, take payments, view today's dashboard. **No reports, no day total.** |
+| **Dentist** | The clinic's dentists (a shared login) | Everything Receptionist can do, **plus** record visits/treatments, close or continue a treatment, **schedule follow-ups from the visit screen**. **No reports, no day total** (narrowed in 6.12). |
+| **Admin** | Your mother, the owner | Everything, **plus** the **Reports page and today's collections**, manage staff, edit the price list, clinic settings |
 
 > **Important:** your mother is one person who is both Dentist and Admin. Don't make her log in twice. Model permissions as a **set** — let one user hold `["dentist", "admin"]`. A single `role` string column forces an awkward `"dentist_admin"` hack later. Use a `roles` array from the start.
+
+> **6.12 — the money is admin-only.** The owner asked that the practice's takings sit behind her
+> login alone, so **`GET /reports` and `GET /invoices/collections` are `require_role("admin")`**.
+> The dentist role *lost* reports in that change (it had them from 6.1). Billing an individual
+> patient deliberately did **not** move — that is front-desk work, and narrowing it would break the
+> receptionist on day one. The three logins are **shared role accounts, not one per person**: which
+> dentist treated a patient is recorded by the dentist dropdown, as it has been since 6.5.
 
 ---
 
@@ -565,15 +572,22 @@ and executed in Phase 7, once there's something worth deploying.
 | 6.10 | **The OPD clinical record.** Driven by the clinic's actual paper out-patient card. The visit gains 18 clinical fields — history, vitals (BP), the seven examination fields, investigations, **provisional/differential/final diagnosis**, referral — plus `V-1042` numbering and a **printable OPD sheet**. `patient` gains guardian/address/`recall_due` (Phase 4 of the treatment workflow, with a dashboard card); `treatment` gains `phase` 1–4. | `feat: record the full OPD clinical record on a visit` |
 | 6.11 | **NEW SCOPE — the dental chart (odontogram).** §1 listed dental charting as explicitly out of scope; the clinic owner asked for a cumulative mouth chart and it is built deliberately (like uploads in 5.6 and lab in 6.6). `tooth_condition` is **append-only** — re-marking a tooth supersedes rather than overwrites, so the pre-treatment state survives as medico-legal history. Permanent **and** deciduous FDI teeth. | `feat: add the dental chart (odontogram)` |
 
+| 6.12 | **Three logins, and the money goes admin-only.** Owner-requested, after Phase 7 had started — the clinic moves from one shared login to **one account per role** (receptionist / dentist / admin). `GET /reports` narrows from dentist+admin to **`require_role("admin")`**, and `GET /invoices/collections` (the dashboard day total) moves with it, because locking Reports alone would have been theatre. **Billing an individual patient stays front-desk.** `app/seed.py` now seeds all three accounts from env vars; the Supabase users themselves get created in **7.3**. | `feat: restrict reports and collections to admin, seed three role logins` |
+| 6.13 | **The check step.** A full end-to-end pass across all three roles, hunting bugs and workflow friction — findings in [`CHECK_REPORT.md`](CHECK_REPORT.md). Ships a **permanent E2E harness** (`backend/scripts/e2e_check.py`, 75 checks) to replace the throwaway scripts of 6.9/6.11. Four fixes: **LIKE-wildcard escaping** in patient search (typing `%` returned every patient), **archived patients refuse new appointments/visits** (the rule `patient_files.py` had since 5.6, applied consistently), booking now **lands on the day it booked** instead of today, and the receptionist's dead-end "Record now" button is hidden. | `fix: usability and workflow fixes from the end-to-end check pass` |
+
 > Milestone: feature-complete on localhost. **Demo it to your mother before deploying** —
 > cheaper to fix now than after real data exists.
+>
+> **6.12–6.13 reopened Phase 6 mid-Phase-7**, deliberately: both change the app, and changing the
+> auth model or the workflow *after* go-live means doing it while real staff accounts and real
+> patient records exist. Phase 7 stays purely deployment and resumes at 7.3.
 
 ### PHASE 7 — Deployment research & go live 🔬
 The research spike you wanted. Do it *here*, with a real app to size.
 
 | 7.1 | **Research spike — DONE.** [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) compares hosting · Postgres · storage on ₹/mo, setup hours, maintenance hours, restore story. Two owner inputs reshaped it: **images stay manual (no cloud storage at all)** and the clinic sees **~3 patients/day**, which puts a 500 MB free Postgres tier ~10 years out. Result: **India residency is free** (DO Bangalore undercuts Hetzner; Supabase Free has Mumbai), and **Vercel is disqualified — its Hobby plan forbids commercial use.** | `docs: add deployment options analysis` |
 | 7.2 | **The decision — DONE.** [`docs/DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) records it: **stack B — DO Bangalore 1 GB + Supabase Free (Mumbai) ≈ ₹655/mo**, India-resident, managed Postgres (so **no override** of the `CLAUDE.md` rule), **no cloud file storage** (images stay manual → the droplet is **stateless**), **no droplet backups**, images built in **GitHub Actions**. Upgrade triggers written down — the likely one is **a failed restore rehearsal**, not running out of space. One open fact: the existing Supabase Auth project's region, → 7.3. | `docs: record deployment decision` |
-| 7.3 | Managed Postgres provisioned (**Supabase, Mumbai**). Also: **check the Auth project's region and recreate it in Mumbai if needed — before any real data exists**, since `staff_user.id` IS the Supabase UUID | — |
+| 7.3 | Managed Postgres provisioned (**Supabase, Mumbai**). Also: **check the Auth project's region and recreate it in Mumbai if needed — before any real data exists**, since `staff_user.id` IS the Supabase UUID. And **create the three login users from 6.12** (receptionist / dentist / admin), then seed their `staff_user` rows with `python -m app.seed` | — |
 | 7.4 | `docker-compose.prod.yml` + prod Caddyfile | `feat: add production compose config` |
 | 7.5 | Domain + DNS + first manual deploy | — |
 | 7.6 | CI: extend Actions to deploy on push to main | `ci: add deploy pipeline` |

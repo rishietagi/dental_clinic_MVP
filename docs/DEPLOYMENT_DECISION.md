@@ -142,6 +142,11 @@ For **7.3** (provision), unless noted.
       > [`LOG.md`](LOG.md) standing decisions. Recreating the auth project therefore changes the
       > admin's primary key, orphaning any row that references it. Harmless now, for exactly the
       > reasons above, and **precisely why this must happen before any real data exists.**
+- [ ] **Create THREE login users, not one** (added by step 6.12): receptionist, dentist and admin.
+      Create them in the Supabase dashboard, then copy each UUID into `.env`
+      (`ADMIN_*` / `DENTIST_*` / `RECEPTION_*`) and run `python -m app.seed`, which upserts all
+      three `staff_user` rows. The admin holds `["dentist","admin"]` — one login, both roles.
+      **Only the admin account sees the practice's money** (Reports + today's collections).
 - [ ] **Provision Supabase Postgres in Mumbai** and confirm the free tier's stated limits at signup —
       a pricing page and a signup flow do not always agree.
 - [ ] **Verify the keep-awake mitigation** (§3) rather than assuming it.

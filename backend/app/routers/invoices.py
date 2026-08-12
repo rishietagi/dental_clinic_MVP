@@ -10,6 +10,13 @@ the receptionist's job (BUILD_PLAN §2) — the front desk creates invoices and 
 payment; the dentist writes the clinical record. A test asserts a receptionist can
 generate.
 
+**One exception (6.12): `GET /invoices/collections` is `require_role("admin")`.**
+Per-invoice work is front-desk, but the *clinic-wide day total* is an owner metric,
+and 6.12 put every practice-money view behind admin. The distinction that matters:
+billing an individual patient is the job; seeing what the practice took today is
+not. Everything else on this router stays any-active-staff — narrowing them would
+break the front desk.
+
 **One request = one transaction.** Generating writes the invoice, its lines, and an
 audit row; they commit together. The generation rule (including the price snapshot
 and the one-per-visit check) lives in `services/billing.py`, which raises domain
@@ -33,7 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_staff
+from app.auth import get_current_staff, require_role
 from app.db import get_db
 from app.models.invoice import Invoice
 from app.models.invoice_line import InvoiceLine
@@ -230,13 +237,15 @@ def create_payment(
 @router.get("/invoices/collections", response_model=CollectionsRead)
 def get_todays_collections(
     db: Session = Depends(get_db),
-    staff: StaffUser = Depends(get_current_staff),
+    staff: StaffUser = Depends(require_role("admin")),
 ) -> CollectionsRead:
     """Money collected on the clinic's today, total + a per-mode breakdown.
 
-    The owner's-eye dashboard figure (BUILD_PLAN §5.4). Any active staff — the
-    front desk reconciles the drawer at day's end. "Today" is the clinic-local day
-    (see services/billing.todays_collections).
+    The owner's-eye dashboard figure (BUILD_PLAN §5.4). **Admin-only as of 6.12** —
+    this is the practice's takings, not one patient's bill, and the owner asked for
+    every practice-money view to sit behind the admin login. It was any-active-staff
+    from 5.5 until then. "Today" is the clinic-local day (see
+    services/billing.todays_collections).
 
     Declared BEFORE `GET /invoices/{invoice_id}`, or FastAPI would parse
     "collections" as a UUID path param and 422 — the literal-before-{id} trap.

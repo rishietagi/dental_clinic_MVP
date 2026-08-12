@@ -808,10 +808,24 @@ before now correctly lands on its clinic day. The old UTC-everywhere caveat is r
 
 ### Seeding (`app/seed.py`)
 
-`python -m app.seed` upserts the admin `staff_user` row from `ADMIN_USER_ID` / `ADMIN_EMAIL` /
-`ADMIN_NAME` (idempotent — safe to re-run). `ADMIN_USER_ID` is the admin's Supabase UUID, so the
-seeded row's PK matches their Auth identity. Run it once per environment after migrating:
+`python -m app.seed` upserts the staff `staff_user` rows from env vars (idempotent — safe to
+re-run). Each `*_USER_ID` is that user's Supabase Auth UUID, so the seeded row's PK matches their
+Auth identity. Run it once per environment after migrating:
 `docker compose run --rm backend python -m app.seed`.
+
+**Three logins as of 6.12** — one shared account per role, not one per person:
+
+| Env prefix | Roles seeded | Sees the practice's money? |
+|---|---|---|
+| `ADMIN_*` (**required**) | `["dentist", "admin"]` | ✅ Reports + today's collections |
+| `DENTIST_*` (optional) | `["dentist"]` | ❌ |
+| `RECEPTION_*` (optional) | `["receptionist"]` | ❌ |
+
+The admin holds both roles deliberately: the owner is one person who is dentist and admin, and must
+not log in twice (BUILD_PLAN §2) — `require_role` intersects sets, so holding `["dentist","admin"]`
+passes an admin-only guard even though `"dentist"` alone no longer does. The two optional accounts
+are skipped silently when their vars are blank, so an environment predating 6.12 keeps working;
+setting only *some* of a prefix's three vars is a hard error rather than a guess.
 
 `python -m app.seed_patients` (step 2.5) is a **dev-data** seed: ~50 fake patients (hand-rolled
 Indian names, stdlib random, no faker). Idempotent via a count guard (skips if ≥50 already

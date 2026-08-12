@@ -44,6 +44,15 @@ def _get_or_404(db: Session, patient_id: UUID) -> Patient:
     return patient
 
 
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so a search term is matched literally.
+
+    The backslash must be escaped FIRST, or it would then re-escape the escapes we
+    add for % and _. Paired with `ilike(..., escape="\\\\")` at the call site.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("", response_model=PatientListResponse)
 def list_patients(
     q: str | None = Query(default=None, description="Search text (matches name or phone)."),
@@ -59,6 +68,13 @@ def list_patients(
     "type anything"). At clinic scale a plain ILIKE scan is instant — no index
     needed; a pg_trgm GIN index is the escalation path if the table ever grows.
     Archived patients are hidden unless include_archived=true.
+
+    The search term is ESCAPED before it goes into the LIKE pattern (6.13). `%` and
+    `_` are wildcards in SQL LIKE, so an unescaped term let a search box behave in
+    ways nobody intended: typing `%` matched EVERY patient, and `_` matched any
+    single character, so `98_1` silently matched numbers the user never asked for.
+    Not an injection — SQLAlchemy still parameterises the value — but wrong results
+    from a search box are their own kind of bug at a front desk.
     """
     conditions = []
     if not include_archived:
@@ -66,8 +82,13 @@ def list_patients(
 
     term = (q or "").strip()
     if term:
-        pattern = f"%{term}%"
-        conditions.append(or_(Patient.name.ilike(pattern), Patient.phone.ilike(pattern)))
+        pattern = f"%{_escape_like(term)}%"
+        conditions.append(
+            or_(
+                Patient.name.ilike(pattern, escape="\\"),
+                Patient.phone.ilike(pattern, escape="\\"),
+            )
+        )
 
     base = select(Patient)
     for cond in conditions:

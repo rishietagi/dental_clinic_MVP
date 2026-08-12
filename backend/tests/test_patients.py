@@ -15,6 +15,7 @@ from app.auth import get_current_claims
 from app.config import settings
 from app.db import SessionLocal
 from app.main import app
+from app.models.appointment import Appointment
 from app.models.audit_log import AuditLog
 from app.models.patient import Patient
 from app.models.staff_user import StaffUser
@@ -67,6 +68,15 @@ def as_staff(db_available):
         # Clean up audit rows + patients this test created, then the staff row.
         for row in db.execute(select(AuditLog).where(AuditLog.actor_id == staff.id)).scalars():
             db.delete(row)
+        # Appointments first — appointment.patient_id is a real FK, so deleting the
+        # patient while one exists is a ForeignKeyViolation. Added in 6.13 when a
+        # test here first needed to book.
+        if _created_patient_ids:
+            for appt in db.execute(
+                select(Appointment).where(Appointment.patient_id.in_(_created_patient_ids))
+            ).scalars():
+                db.delete(appt)
+            db.commit()
         for pid in _created_patient_ids:
             obj = db.get(Patient, pid)
             if obj is not None:
@@ -185,6 +195,42 @@ def test_search_by_name_and_phone(as_staff):
     assert client.get("/patients", params={"q": f"nomatch{tag}"}).json()["total"] == 0
 
 
+def test_search_treats_like_wildcards_literally(as_staff):
+    """`%` and `_` are LIKE wildcards — the search must match them as characters.
+
+    Found in the 6.13 check pass: unescaped, `q="%"` returned EVERY patient and
+    `q="_"` matched any single character, so a phone search like `98_1` silently
+    matched numbers the user never asked for. Not injection (the value is still
+    parameterised) — just wrong results from a search box, which at a front desk
+    is its own kind of bug.
+    """
+    client, _ = as_staff
+    tag = uuid.uuid4().hex[:8]
+    _create(client, name=f"Percent {tag} 100%", phone="+915551110000")
+    _create(client, name=f"Plain {tag}", phone="+915552220000")
+
+    everyone = client.get("/patients").json()["total"]
+
+    # A bare wildcard must NOT return the whole table. It can legitimately match
+    # other patients whose names contain a literal '%', so compare against the
+    # unfiltered count rather than asserting zero — the shared test DB makes any
+    # absolute number here a flake waiting to happen.
+    wildcard = client.get("/patients", params={"q": "%"}).json()
+    assert wildcard["total"] < everyone
+    assert all("%" in p["name"] for p in wildcard["items"])
+
+    underscore = client.get("/patients", params={"q": "_"}).json()
+    assert underscore["total"] < everyone
+
+    # A literal % in a name is findable, and only that patient comes back.
+    hit = client.get("/patients", params={"q": f"{tag} 100%"}).json()
+    assert hit["total"] == 1
+    assert hit["items"][0]["name"] == f"Percent {tag} 100%"
+
+    # `_` must not act as "any character": this would match "Plain <tag>" if it did.
+    assert client.get("/patients", params={"q": f"Pla_n {tag}"}).json()["total"] == 0
+
+
 def test_archived_hidden_by_default(as_staff):
     client, _ = as_staff
     tag = uuid.uuid4().hex[:8]
@@ -195,6 +241,43 @@ def test_archived_hidden_by_default(as_staff):
     assert client.get(
         "/patients", params={"q": tag, "include_archived": "true"}
     ).json()["total"] == 1
+
+
+def test_archived_patient_refuses_new_activity(as_staff):
+    """An archived record is RETAINED but not actively added to (6.13).
+
+    `patient_files.py` has enforced this since 5.6; booking and visits never got
+    the same rule, so the API accepted activity the UI already hides. Making the
+    three consistent is the point — the failure mode was a patient archived by
+    mistake quietly accumulating new appointments.
+    """
+    client, _ = as_staff
+    tag = uuid.uuid4().hex[:8]
+    patient = _create(client, name=f"Gone {tag}")
+    client.post(f"/patients/{patient['id']}/archive")
+
+    booked = client.post(
+        "/appointments",
+        json={
+            "patient_id": patient["id"],
+            "start_time": "2099-01-01T10:00:00+00:00",
+            "duration_min": 30,
+        },
+    )
+    assert booked.status_code == 409, booked.text
+    assert "archived" in booked.json()["detail"].lower()
+
+    # Unarchiving must make it work again — this is a soft block, not a dead end.
+    client.post(f"/patients/{patient['id']}/unarchive")
+    again = client.post(
+        "/appointments",
+        json={
+            "patient_id": patient["id"],
+            "start_time": "2099-01-01T10:00:00+00:00",
+            "duration_min": 30,
+        },
+    )
+    assert again.status_code == 201, again.text
 
 
 def test_pagination_and_limit_bounds(as_staff):

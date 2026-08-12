@@ -21,7 +21,9 @@ import {
 
 import { useState } from "react";
 
-import { ErrorState, LoadingState } from "@/components/states";
+import { Lock } from "lucide-react";
+
+import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
@@ -54,6 +56,18 @@ export function ReportsView() {
   const state = useReports(dentistId || undefined);
   const dentists = useStaff("dentist");
   const dentistOptions = dentists.kind === "ready" ? dentists.items : [];
+
+  // Not an admin (6.12). Return before the dentist filter — offering a control that
+  // filters nothing would be worse than showing nothing.
+  if (state.kind === "forbidden") {
+    return (
+      <EmptyState
+        icon={<Lock className="size-6" />}
+        title="Reports are for the admin login"
+        hint="Practice revenue, procedure mix and no-show rates are only visible to the clinic owner. Ask her to sign in if you need these figures."
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

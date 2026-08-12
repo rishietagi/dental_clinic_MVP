@@ -167,6 +167,29 @@ def as_receptionist(db_available):
         _cleanup(ctx)
 
 
+@pytest.fixture
+def as_admin(db_available):
+    """An admin context — needed for `GET /invoices/collections` since 6.12.
+
+    Everything else on this router stays any-active-staff; only the clinic-wide
+    day total moved behind admin.
+    """
+    ctx = _make_ctx(["admin"])
+    try:
+        yield ctx
+    finally:
+        _cleanup(ctx)
+
+
+@pytest.fixture
+def as_dentist(db_available):
+    ctx = _make_ctx(["dentist"])
+    try:
+        yield ctx
+    finally:
+        _cleanup(ctx)
+
+
 def _record_visit(ctx: Ctx, *, procedures) -> str:
     """Create a visit + its procedures directly in the DB, return the visit id.
 
@@ -392,6 +415,36 @@ def test_receptionist_can_generate(as_receptionist):
     assert resp.status_code == 201, resp.text
 
 
+def test_receptionist_can_still_bill_end_to_end_after_612(as_receptionist):
+    """6.12 locked the money REPORTS to admin; it must not lock BILLING.
+
+    This is the regression 6.12 could plausibly have caused, and it would break the
+    front desk on day one: the receptionist must still generate an invoice, take a
+    payment, read the invoice back, and browse the ledger. Only the clinic-wide day
+    total moved. If someone later "tidies up" by narrowing this router wholesale,
+    this test is what should stop them.
+    """
+    ctx = as_receptionist
+    visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])  # total 4000
+
+    gen = ctx.client.post(f"/visits/{visit_id}/invoice", json={})
+    assert gen.status_code == 201, gen.text
+    invoice_id = gen.json()["id"]
+
+    pay = ctx.client.post(
+        f"/invoices/{invoice_id}/payments", json={"amount": "1000.00", "mode": "cash"}
+    )
+    assert pay.status_code == 201, pay.text
+
+    read = ctx.client.get(f"/invoices/{invoice_id}")
+    assert read.status_code == 200, read.text
+    assert read.json()["outstanding"] == "3000.00"
+
+    ledger = ctx.client.get("/invoices")
+    assert ledger.status_code == 200, ledger.text
+    assert any(i["id"] == invoice_id for i in ledger.json()["items"])
+
+
 def test_generation_writes_audit_row(as_receptionist):
     ctx = as_receptionist
     visit_id = _record_visit(ctx, procedures=[ctx.item_a.id])
@@ -559,11 +612,14 @@ def test_get_invoice_for_unknown_visit(as_receptionist):
     assert resp.status_code == 404
 
 
-# --- today's collections (5.5) -----------------------------------------------
+# --- today's collections (5.5, admin-only since 6.12) ------------------------
 #
 # The test DB is shared, so other suites' payments may also fall on "today". These
 # tests assert on the DELTA the payments they make cause, not absolute totals — the
 # one exception is the route-shape/empty checks, which only look at structure.
+#
+# These all run `as_admin` now. The clinic-wide day total is an owner metric; the
+# receptionist and dentist 403 cases are asserted separately below.
 
 def _collections(ctx: Ctx) -> dict:
     resp = ctx.client.get("/invoices/collections")
@@ -571,16 +627,16 @@ def _collections(ctx: Ctx) -> dict:
     return resp.json()
 
 
-def test_collections_shape(as_receptionist):
-    ctx = as_receptionist
+def test_collections_shape(as_admin):
+    ctx = as_admin
     data = _collections(ctx)
     assert set(data.keys()) == {"date", "total", "count", "by_mode"}
     # by_mode always carries all three modes for a stable card layout.
     assert set(data["by_mode"].keys()) == {"cash", "card", "upi"}
 
 
-def test_collections_sums_todays_payments_by_mode(as_receptionist):
-    ctx = as_receptionist
+def test_collections_sums_todays_payments_by_mode(as_admin):
+    ctx = as_admin
     inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
 
     before = _collections(ctx)
@@ -597,10 +653,10 @@ def test_collections_sums_todays_payments_by_mode(as_receptionist):
     assert _mode_delta(after, before, "upi") == Decimal("250.00")
 
 
-def test_collections_counts_the_clinic_day_not_utc(as_receptionist):
+def test_collections_counts_the_clinic_day_not_utc(as_admin):
     """A payment at an instant that is 'today' in the clinic zone but a different
     calendar day in UTC is counted for the clinic day — the 4.9 fix, for money."""
-    ctx = as_receptionist
+    ctx = as_admin
     db = ctx.db
 
     # Pin the clinic to IST and read what "today" is there.
@@ -634,9 +690,21 @@ def test_collections_requires_auth():
     assert client.get("/invoices/collections").status_code in (401, 403)
 
 
-def test_collections_not_shadowed_by_id_route(as_receptionist):
-    """'collections' must resolve to the aggregate, not be parsed as an invoice id."""
+def test_collections_forbidden_for_receptionist(as_receptionist):
+    """The front desk bills patients but must not see the clinic's day total (6.12)."""
     ctx = as_receptionist
+    assert ctx.client.get("/invoices/collections").status_code == 403
+
+
+def test_collections_forbidden_for_dentist(as_dentist):
+    """A dentist login records clinical work; the takings are the owner's (6.12)."""
+    ctx = as_dentist
+    assert ctx.client.get("/invoices/collections").status_code == 403
+
+
+def test_collections_not_shadowed_by_id_route(as_admin):
+    """'collections' must resolve to the aggregate, not be parsed as an invoice id."""
+    ctx = as_admin
     resp = ctx.client.get("/invoices/collections")
     assert resp.status_code == 200  # not 422 (uuid parse) or 404 (no such invoice)
 

@@ -45,7 +45,10 @@ const NAV: NavItem[] = [
   { label: "Calendar", href: "/calendar", icon: CalendarDays },
   { label: "Invoices", href: "/invoices", icon: Receipt },
   { label: "Lab", href: "/lab", icon: FlaskConical },
-  { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["dentist", "admin"] },
+  // Admin-only as of 6.12 (was dentist+admin): the practice's revenue is the
+  // owner's view, and the clinic now runs one login per role. The API is the real
+  // guard (require_role("admin") on GET /reports) — hiding the item is convenience.
+  { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["admin"] },
   // Renamed "Treatments" -> "Pricing" in 6.7: the screen now covers treatments,
   // medicines, and per-dentist consultation fees. The route is unchanged.
   { label: "Pricing", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },

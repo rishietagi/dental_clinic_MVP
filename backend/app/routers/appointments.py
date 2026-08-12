@@ -112,9 +112,19 @@ def create_appointment(
     staff: StaffUser = Depends(get_current_staff),
 ) -> Appointment:
     # Friendly 404 if the patient doesn't exist, rather than a raw FK error.
-    if db.get(Patient, body.patient_id) is None:
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
+        )
+    # An archived patient's record is RETAINED but not actively added to (6.13).
+    # The same rule patient_files.py has enforced since 5.6 — booking and visits
+    # simply never got it, so the API allowed activity the UI already hides.
+    # Unarchive first if the patient really is coming back.
+    if patient.archived:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot book an appointment for an archived patient.",
         )
     _validate_dentist(db, body.dentist_id, field="Dentist")
     _validate_dentist(db, body.consulting_dentist_id, field="Consulting dentist")

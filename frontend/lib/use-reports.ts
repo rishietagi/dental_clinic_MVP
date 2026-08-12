@@ -2,9 +2,13 @@
 
 // Practice reports (step 6.1): revenue trend, procedure mix, no-show rate.
 //
-// One fetch of GET /reports (dentist/admin) drives the whole screen. Money values
-// are decimal strings — formatted via formatMoney (from use-invoices), never float
-// math (the 4.1 rule).
+// One fetch of GET /reports (**admin only** as of 6.12) drives the whole screen.
+// Money values are decimal strings — formatted via formatMoney (from use-invoices),
+// never float math (the 4.1 rule).
+//
+// A 403 gets its own state rather than folding into `error`: a receptionist or
+// dentist landing here is not a fault, it is the guard working, and it should read
+// as a calm "not for this login" rather than a red something-went-wrong panel.
 
 import { useEffect, useState } from "react";
 
@@ -37,6 +41,7 @@ export type Reports = {
 type State =
   | { kind: "loading" }
   | { kind: "ready"; data: Reports }
+  | { kind: "forbidden" } // signed in, but not an admin (6.12)
   | { kind: "error"; message: string };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -67,7 +72,10 @@ export function useReports(dentistId?: string): State {
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
-        if (res.status === 403) throw new Error("Reports are for the dentist/admin only.");
+        if (res.status === 403) {
+          if (!cancelled) setState({ kind: "forbidden" });
+          return;
+        }
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Reports;
