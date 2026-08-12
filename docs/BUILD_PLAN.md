@@ -572,8 +572,8 @@ and executed in Phase 7, once there's something worth deploying.
 The research spike you wanted. Do it *here*, with a real app to size.
 
 | 7.1 | **Research spike — DONE.** [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) compares hosting · Postgres · storage on ₹/mo, setup hours, maintenance hours, restore story. Two owner inputs reshaped it: **images stay manual (no cloud storage at all)** and the clinic sees **~3 patients/day**, which puts a 500 MB free Postgres tier ~10 years out. Result: **India residency is free** (DO Bangalore undercuts Hetzner; Supabase Free has Mumbai), and **Vercel is disqualified — its Hobby plan forbids commercial use.** | `docs: add deployment options analysis` |
-| 7.2 | Pick a stack, document the decision + why | `docs: record deployment decision` |
-| 7.3 | Managed Postgres provisioned (India region if residency matters) | — |
+| 7.2 | **The decision — DONE.** [`docs/DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) records it: **stack B — DO Bangalore 1 GB + Supabase Free (Mumbai) ≈ ₹655/mo**, India-resident, managed Postgres (so **no override** of the `CLAUDE.md` rule), **no cloud file storage** (images stay manual → the droplet is **stateless**), **no droplet backups**, images built in **GitHub Actions**. Upgrade triggers written down — the likely one is **a failed restore rehearsal**, not running out of space. One open fact: the existing Supabase Auth project's region, → 7.3. | `docs: record deployment decision` |
+| 7.3 | Managed Postgres provisioned (**Supabase, Mumbai**). Also: **check the Auth project's region and recreate it in Mumbai if needed — before any real data exists**, since `staff_user.id` IS the Supabase UUID | — |
 | 7.4 | `docker-compose.prod.yml` + prod Caddyfile | `feat: add production compose config` |
 | 7.5 | Domain + DNS + first manual deploy | — |
 | 7.6 | CI: extend Actions to deploy on push to main | `ci: add deploy pipeline` |
@@ -639,12 +639,13 @@ WhatsApp reminders + follow-up nudges · recall reminders
 | Sentry / UptimeRobot | free |
 | **Total** | **~₹500–1,200/mo** |
 
-**Verified in 7.1 (priced 2026-08-06) — the estimate holds.** The recommended stack (DigitalOcean
-Bangalore 1 GB + Supabase Free Mumbai + domain) comes to **~₹655/mo**, inside the range and fully
-India-resident. Two caveats [`DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) adds: file storage is
-**₹0** because the clinic keeps images manually, and **managed backups roughly quintuple the bill**
-(Supabase Pro is $25/mo, taking the total to ~₹3,600) — so the free tier's missing backups are a
-real Phase-8 work item, not a saving.
+**Verified in 7.1 (priced 2026-08-06) and DECIDED in 7.2 — the estimate holds.** The chosen stack
+(DigitalOcean Bangalore 1 GB + Supabase Free Mumbai + domain) comes to **~₹655/mo**, inside the range
+and fully India-resident — see [`DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md). Two caveats
+[`DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) adds: file storage is **₹0** because the clinic
+keeps images manually, and **managed backups roughly quintuple the bill** (Supabase Pro is $25/mo,
+taking the total to ~₹3,600) — so the free tier's missing backups are a real Phase-8 work item, not
+a saving. **Prices are 2026-08-06 figures; re-confirm in 7.3 before paying.**
 
 Roughly what BestoSys costs. **The build saves no money.** Its value is the learning and the "in production at a real clinic" line. That's a good reason — just be honest that it's the reason.
 

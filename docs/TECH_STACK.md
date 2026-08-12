@@ -190,8 +190,13 @@ limited to what exists. Each moves up when the step that introduces it lands.
 
 | Layer | Choice | Arrives in |
 |---|---|---|
-| Hosting | Single VPS or PaaS — decided in Phase 7 | Phase 7 |
+| Hosting | **DigitalOcean Bangalore, Basic 1 GB droplet** — VPS + Docker. Decided in 7.2, see [`DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) | Phase 7 (7.4–7.5) |
+| Managed Postgres | **Supabase Free, Mumbai region.** Same vendor as auth | Phase 7 (7.3) |
 | Monitoring | Sentry + UptimeRobot | Phase 8 |
+
+> **Images are built in GitHub Actions and pulled by the droplet, never built on the box** — a 1 GB
+> machine OOMs on `npm run build`. **No cloud file storage**: images are handled manually, so
+> `LocalStorage` stays as-is and the droplet is stateless.
 
 > Auth (Supabase) moved into the installed tables above as of step 1.1.
 

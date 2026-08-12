@@ -21,20 +21,35 @@ overhaul · 6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists +
 + navigation · 6.9 reseed by simulation + E2E · 6.10 the OPD clinical record · 6.11 the dental
 chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 
-> ### ➡️ NEXT: Step 7.2 — pick a stack and record the decision
+> ### ➡️ NEXT: Step 7.3 — provision managed Postgres (Supabase, Mumbai)
 >
-> **7.1 is DONE** — [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) is written, priced
-> 2026-08-06, every ₹ figure sourced. **Read its §8 (recommendation) and §9 (the decision
-> checklist) — §9 is literally 7.2's agenda.** 7.2 is also writing, not code.
+> **7.1 AND 7.2 are DONE — both docs-only.** The stack is **decided**:
+> [`docs/DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) is the record;
+> [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) is the sourced comparison behind it (its §9
+> checklist is now ticked). **7.3 is the first step that spends money and touches a real service.**
 >
-> **What 7.1 concluded, in one breath:** two owner inputs shrank the problem — **images stay manual
-> (no cloud file storage at all, ₹0)** and the clinic sees **~3 patients/day**, so at ~55 kB/visit a
-> **500 MB free Postgres tier lasts about ten years**. Capacity therefore costs nothing, and
-> **India residency turns out to be FREE** (DigitalOcean Bangalore ₹570 undercuts Hetzner ₹604, and
-> Supabase Free has a Mumbai region). Recommendation: **DO Bangalore 1 GB + Supabase Free Mumbai ≈
-> ₹655/mo.** Its one weak point is **no managed backups** — that is real Phase-8 work, not a saving.
+> **The decision, in one breath:** **stack B — DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai)
+> ≈ ₹655/mo.** India-resident, **managed** Postgres (so the `CLAUDE.md` rule needs **no override**),
+> **no cloud file storage** (images stay manual → **the droplet is stateless**), **no droplet
+> backups**, images built in **GitHub Actions** (a 1 GB box OOMs on `npm run build`). It fits
+> `BUILD_PLAN.md` §12's ₹500–1,200 estimate. All four owner answers matched 7.1's recommendation.
 >
-> **Three things 7.2 must not re-litigate from scratch** (all researched, with sources in the doc):
+> **What 7.3 must actually do:**
+> 1. **Provision Supabase Postgres in the Mumbai region**, and confirm the free tier's limits at
+>    signup — a pricing page and a signup flow don't always agree.
+> 2. **Find out which region the EXISTING Supabase Auth project is in.** This is the one fact 7.2
+>    left open. **If it is not Mumbai, recreate it there NOW** — prod starts with an empty DB and
+>    there are only 2 logins, so it is nearly free today. ⚠️ **`staff_user.id` IS the Supabase Auth
+>    UUID**, so recreating changes the admin's PK and orphans rows referencing it — harmless while
+>    the local DB is disposable, ruinous after real patients exist. **That is exactly why it happens
+>    before go-live.**
+> 3. **Verify the keep-awake mitigation** (a free Supabase project **pauses after ~1 week idle** —
+>    a Diwali closure would mean nobody can sign in on Monday). The theory is that 8.1's UptimeRobot
+>    monitor hitting a DB-touching endpoint counts as activity. **That is reasoning, not a tested
+>    fact — test it.**
+> 4. **Re-confirm every price before paying.** The figures are 2026-08-06 and cloud pricing moves.
+>
+> **Three things NOT to re-litigate** (researched, sourced in the options doc):
 > - **Vercel is disqualified** — the Hobby plan **forbids commercial use** and Vercel may pull a
 >   deployment without notice. The 1M-request headroom was real (we need ~48k/mo); the *terms* are
 >   the blocker. Pro ($20/mo) costs more than a droplet and still doesn't host the FastAPI backend.
@@ -43,8 +58,12 @@ chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 >   was never enacted). India residency is a prudential choice, not a legal requirement — it just
 >   happens to also be the cheapest one here.
 >
+> **The accepted weak point:** Supabase Free has **no managed backups**. A nightly `pg_dump` + an
+> **off-box** copy + a **rehearsed** restore is **real Phase-8 work, not a checkbox** — that is the
+> honest price of the ₹655, and **8.3 gates real patient data on it**. The upgrade trigger most
+> likely to fire is **a failed restore rehearsal**, not running out of space.
+>
 > **Still local-only.** Do not add prod compose, domains, TLS or CI deploy before 7.4–7.6.
-> And note **8.3 (a tested backup restore) gates real patient data** — seed data only until then.
 
 **Demo-feedback gate: cleared for now** (asked 2026-08-06, nothing outstanding). Every step from 6.3
 onward came from the owner using the app, so expect more — and changing the schema is still a
@@ -448,6 +467,7 @@ the original step instructions say otherwise:
 | **First role-split resource: `require_role` on the API** | — | Everything before 4.1 guarded every route with `get_current_staff`. The treatment catalogue splits it: **reads = any active staff** (the dentist/receptionist need the list for visits + invoices), **writes = `require_role("admin")`** (BUILD_PLAN §2). The UI hides the controls from non-admins, but that's convenience — the API is the guard, and a test asserts a receptionist gets **403** on every mutation. | `backend/app/routers/treatment_items.py`, `backend/app/auth.py` |
 | **Status is an app-level state machine (no DB enum)** | — | Appointment `status` stays a free-text column; the allowed transitions (`booked→arrived→done`, `booked/arrived→cancelled\|no_show`, terminals) are enforced in `services/appointments.py` `can_transition` and exposed via `POST /{id}/status`. Unknown value → 422 (schema `Literal`); illegal transition → 409. **Only `cancelled` frees a slot** (3.2 constraint); `done`/`no_show` are historical, so no constraint/migration change. `no_show` stored underscored, shown "No-show". Frontend mirrors the map in `lib/appointment-status.ts` (UX only; API is the guard). | `backend/app/services/appointments.py`, `backend/app/routers/appointments.py` |
 | **Double-booking = GiST EXCLUDE constraint (first hand-written migration)** | — | `appointment_no_overlap` is a Postgres `EXCLUDE USING gist` constraint — the real double-booking guarantee (survives two racing PCs). **First hand-written migration** (autogenerate can't emit EXCLUDE / CREATE EXTENSION); needs the **`btree_gist`** extension. The range must use **immutable** arithmetic: `timestamptz + interval` is only STABLE and Postgres rejects it in a constraint, so we use `tsrange(timezone('UTC', start_time), timezone('UTC', start_time) + duration_min*interval '1 min', '[)')`. The service `find_conflicts` pre-check uses the SAME expression (keep them in sync). Excludes `cancelled`; NULL dentist never clashes. | `backend/alembic/versions/feae714ecef5_*.py`, `backend/app/services/appointments.py` |
+| **The deployment stack is B — and the droplet is deliberately STATELESS (7.2)** | `CLAUDE.md`/`TECH_STACK.md`: "Hosting — single VPS or PaaS, decided in Phase 7" | **DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai) ≈ ₹655/mo**, India-resident. The shape matters more than the price: **Postgres is Supabase's**, **images stay manual** (no cloud storage, `LocalStorage` untouched), and **images are built in GitHub Actions** — so the droplet holds **no unique state** and is rebuildable from git + prod compose in about an hour. That is why **DO's backup add-on (~₹114/mo) was declined**, and that decision is **void the moment anything durable lands on its disk**. Managed Postgres means the `CLAUDE.md` rule needs **no override** — self-hosting was costed and saves **₹0** while taking on every backup and upgrade duty. **Vercel was researched and disqualified on TERMS** (Hobby forbids commercial use), not on limits. The accepted weak point is **no managed backups** → real 8.2/8.3 work. | `docs/DEPLOYMENT_DECISION.md` |
 | **Visual/CSS polish deferred to Phase 6** | — | Frontend is intentionally plain during feature work. **Do NOT** do cosmetic/design passes as tasks in Phases 2–5 — keep UI plain-but-usable. Real design/polish pass lands in **Phase 6 (6.2 + a broader design pass)**, before demo/deploy. (User instruction, 2026-07-19.) | — |
 
 **Docker works** (verified 2026-07-17, after the earlier WSL breakage was repaired): WSL
@@ -461,6 +481,85 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-08-12 — Step 7.2: the deployment decision
+
+**Status:** complete. **Docs only — no code, config, compose, CI or purchases.** Deliverable is
+`docs/DEPLOYMENT_DECISION.md`. Ready to commit.
+
+### The decision
+
+**Stack B — DigitalOcean Bangalore 1 GB droplet + Supabase Free (Mumbai) ≈ ₹655/month.**
+
+| # | Question (from `DEPLOYMENT_OPTIONS.md` §9) | Decision |
+|---|---|---|
+| 1 | Stack | **B**, unmodified — ₹570 droplet + ₹0 Postgres + ₹85 domain |
+| 2 | Residency | **India-only**, app and database both |
+| 3 | Postgres | **Managed** (Supabase). **No override** of the `CLAUDE.md` rule needed |
+| 4 | Supabase Auth region | **Unknown — the one open fact.** Rule: **recreate in Mumbai before go-live** if it isn't already |
+| 5 | File uploads (5.6) | **Effectively unused** — images stay manual; the droplet is therefore **stateless** |
+| 6 | Image builds | **GitHub Actions**, pulled by the box |
+| 7 | Droplet backups | **Declined** (~₹114/mo) — follows from #5 |
+
+**All four owner answers matched 7.1's recommendation**, which is why the record needs no caveats
+about deviating from the agreed stack — nothing is overridden anywhere.
+
+### Why it holds together
+
+Capacity costs nothing at this volume (~55 kB/visit × 75 visits/month ⇒ a 500 MB tier is a **ten-year
+decision**), so the free tiers are judged **only** on backup and uptime terms. India residency is
+**free — slightly negative** (DO Bangalore ₹570 undercuts Hetzner ₹604; Supabase Free has Mumbai), so
+there was no trade-off left to weigh. And it consolidates on Supabase, already the auth provider —
+one vendor, one region, one place to rehearse a restore.
+
+### What the ₹655 costs us (the honest part)
+
+Supabase Free has **no managed backups** and **pauses after ~1 week idle**. Stack B is cheap because
+we take on work Pro would do:
+
+- nightly `pg_dump` + **off-box** copy (8.2) — a dump on the same machine as the app is not a backup;
+- a **tested** restore + `RUNBOOK.md` (8.3) — **8.3 gates real patient data**;
+- a **dead-man's-switch alert** on the backup job (8.1). This was the sharpest point to come out of
+  the step: the real failure mode of a hand-rolled cron is **silence** — it dies, nobody notices, and
+  the discovery happens *during* the emergency. A job that must check in turns that into an email.
+- keeping the project awake — **unverified**, and now an explicit 7.3 task rather than an assumption.
+
+The upgrade trigger most likely to fire is therefore **a failed restore rehearsal**, not running out
+of space (~year 7). Both are written into the record so B is a starting point, not a default that
+rots.
+
+### The wrinkle worth remembering
+
+**`staff_user.id` IS the Supabase Auth UUID.** So recreating the auth project in Mumbai changes the
+admin's primary key and orphans rows referencing it. That is **harmless right now** — prod starts
+with an empty database, there are 2 logins, and the local dev DB is disposable — and **ruinous after
+real patients exist**. It is precisely why the region has to be checked and fixed in **7.3**, not
+later. This is the sort of thing that is free on a Tuesday and a migration project six months on.
+
+### Docs touched
+
+`docs/DEPLOYMENT_DECISION.md` (new) · `DEPLOYMENT_OPTIONS.md` (decided-banner + §9's seven
+checkboxes ticked with terse answers; it stays the comparison and the sourcing) ·
+`BUILD_PLAN.md` (7.2 row → done, 7.3 row gains the auth-region task, §12 notes the decision) ·
+`TECH_STACK.md` ("chosen but not installed" now names DO Bangalore + Supabase Mumbai) ·
+`ARCHITECTURE.md` (a pointer under "Deployment topology"; the section still correctly says nothing
+is built) · `CLAUDE.md` (status lines → 7.2 done, next 7.3).
+
+### Verified / not verified
+
+**Verified:** the arithmetic (₹570 + ₹0 + ₹85 = ₹655, and the rejected add-ons: 20% of ₹570 = ₹114,
+stack C = ₹1,140 + ₹2,375 + ₹85 = ₹3,600); every ₹ figure matches `DEPLOYMENT_OPTIONS.md`; all
+cross-doc links resolve; `git status` shows **only `docs/`** changed — no code, config, compose or
+CI, so the local-only rule held. (`CLAUDE.md` was also edited but is gitignored, so it cannot appear
+in `git status`.) **Not verified — and this step verifies nothing empirically:**
+prices are 7.1's, read 2026-08-06 and **not re-checked** (re-confirm in 7.3 before paying); the
+Supabase Auth project's region is **still unknown**; and the "UptimeRobot keeps a free project awake"
+mitigation remains **reasoning, not a test**.
+
+### Suggested commit
+`docs: record deployment decision`
 
 ---
 

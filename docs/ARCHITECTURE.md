@@ -854,6 +854,11 @@ how the schema evolves without losing patient records.
 Local only. The whole stack runs on one machine under Docker Compose (`docker-compose.yml`).
 No hosting, no TLS, no domain — those are Phase 7.
 
+> **The production target is chosen but not built.** 7.2 decided on a **DigitalOcean Bangalore 1 GB
+> droplet + Supabase Free (Mumbai)** — see [`DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md).
+> Nothing below changes until **7.4** adds `docker-compose.prod.yml` and a prod Caddyfile; this
+> section describes what actually exists today.
+
 ```mermaid
 flowchart LR
     B[Browser<br/>http://localhost] -->|:80| CADDY[caddy:2-alpine]

@@ -7,6 +7,13 @@ and what each option costs in *effort* once it is there.
 section lists exactly what 7.2 has to answer. A recommendation is offered at the end, clearly
 marked as one input to that decision.
 
+> ### ✅ DECIDED — see [`DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md)
+> Step 7.2 (2026-08-12) took **stack B — DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai),
+> ≈₹655/month**, India-resident, on managed Postgres, with **no cloud file storage** and **no
+> droplet backups** (the box is stateless). §9's checklist below is answered and ticked.
+> **This file stays as the comparison and the sourcing** — the reasoning behind the choice, what was
+> rejected, and the upgrade triggers live in the decision record.
+
 > **Priced 2026-08-06.** Every ₹ figure below traces to a source link and was read on that date.
 > Cloud pricing moves — Hetzner raised cloud prices on 15 June 2026 and the old "Hetzner is
 > absurdly cheap" reputation is already out of date. **Re-check the actual figure at the moment
@@ -410,19 +417,28 @@ tested restore — as **real work in Phase 8, not a checkbox**. That is the pric
 
 ---
 
-## 9. What step 7.2 must decide
+## 9. What step 7.2 must decide — ✅ ANSWERED
 
-- [ ] **Residency** — India-only, or is offshore acceptable? *(On these numbers India is free, so
-      this should be quick.)*
-- [ ] **Which stack** — A, B, C, or a mix.
-- [ ] **Managed vs self-hosted Postgres** — and if self-hosted, an **explicit** override of the
-      `CLAUDE.md` managed-Postgres rule, recorded in the LOG as a standing decision.
-- [ ] **Where the existing Supabase Auth project lives**, and whether to move or upgrade it.
-- [ ] **Confirm the file-upload feature's fate** (§0) — unused, or still used for the occasional
-      scanned document? Decides whether `LocalStorage` needs any attention at all in Phase 7.
-- [ ] **Where images get built** — GitHub Actions (recommended; CI exists) or on the box. A 1 GB box
-      cannot run `npm run build`.
-- [ ] **Record the upgrade triggers** (§8) so stack B is a starting point, not a permanent default.
+**All seven were decided on 2026-08-12.** Terse answers below; the reasoning, the rejections and the
+action items are in [`DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md).
+
+- [x] **Residency** — **India-only**, app and database both. It was free, as expected.
+- [x] **Which stack** — **B**, unmodified. ≈₹655/month.
+- [x] **Managed vs self-hosted Postgres** — **managed** (Supabase Free, Mumbai). Self-hosting saves
+      ₹0, so **no override of the `CLAUDE.md` managed-Postgres rule is needed** — the honest reason
+      to list it in §4 was completeness, and it lost on its merits.
+- [x] **Where the existing Supabase Auth project lives** — **still unknown; this is the one open
+      fact.** Decided rule: **if it is not Mumbai, recreate it there before go-live**, while the prod
+      DB is empty and it costs nothing. Carried into 7.3 as an action item.
+- [x] **File-upload feature's fate** — **effectively unused.** Images stay manual, the code stays,
+      `LocalStorage` needs no attention, and the droplet is therefore **stateless**.
+- [x] **Where images get built** — **GitHub Actions**, pulled by the droplet. Never on the box.
+- [x] **Upgrade triggers recorded** — see the decision record §5. The likely one is **a failed
+      restore rehearsal**, not running out of space.
+
+**One thing 7.2 added that this section did not ask for:** DO's droplet-backup add-on (~₹114/mo) was
+considered and **declined**, because the box holds no unique state. That decision is void the moment
+anything durable lands on its disk.
 
 ---
 
