@@ -5,16 +5,21 @@ import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { Toaster } from "@/components/ui/sonner";
 
-// Set the theme BEFORE first paint so a dark user never flashes light. Reads the
-// saved choice, else the OS preference; stamps data-theme (wins over the media
-// query) and the .dark class (drives Tailwind `dark:` variants).
+// LIGHT ONLY (10.6). Stamped before first paint, as it always was, but the
+// choice is now fixed rather than read from localStorage or the OS.
+//
+// Why: the app runs on one shared PC at the clinic's front desk. It followed
+// Windows' theme, so if that machine were set to dark mode the app would open
+// dark — and the sun/moon toggle that used to sit in the sidebar was one more
+// thing to press by accident on a screen used all day. One look, always.
+//
+// The dark palette is still in globals.css and the `dark:` variants still work,
+// so restoring the choice means putting the old script and the toggle back.
 const themeScript = `
 (function(){try{
-  var s=localStorage.getItem('theme');
-  var d=s?s==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
   var r=document.documentElement;
-  r.dataset.theme=d?'dark':'light';
-  r.classList.toggle('dark',d);
+  r.dataset.theme='light';
+  r.classList.remove('dark');
 }catch(e){}})();
 `;
 

@@ -1,15 +1,17 @@
 "use client";
 
-// The app shell (6.2, reworked to a LEFT SIDEBAR in 6.3): a persistent vertical
-// nav rail — clinic name at the top, nav, theme toggle pinned at the bottom —
-// with the page content filling the rest of the width. On small screens the
-// sidebar collapses behind a menu button.
-//
-// 10.1 removed the login, so there is no /login route to opt out and no Sign out
-// button. `anyOf` role filtering is kept on the remaining items: roles still exist
-// on the staff row, they are simply never refused (see backend app/auth.py).
-
 import { useState } from "react";
+
+// The app shell (6.2, reworked to a LEFT SIDEBAR in 6.3): a persistent vertical
+// nav rail — clinic name at the top, nav below — with the page content filling
+// the rest of the width. On small screens the sidebar collapses behind a menu.
+//
+// Nothing sits at the bottom any more: the Sign out button went with the login
+// (10.1) and the theme toggle went when the app was pinned to light (10.6).
+//
+// `anyOf` role filtering is kept on the remaining items: roles still exist on the
+// staff row, they are simply never refused (see backend app/auth.py).
+
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -18,11 +20,9 @@ import {
   FlaskConical,
   LayoutDashboard,
   Menu,
-  Moon,
   Receipt,
   Settings,
   Shield,
-  Sun,
   Users,
   X,
 } from "lucide-react";
@@ -167,37 +167,12 @@ function Sidebar({
           ))}
         </nav>
 
-        {/* 10.1: the Sign out button went with the login screen — there is no
-            session to end. The theme toggle is all that remains here. */}
-        <div className="flex items-center justify-end gap-2 border-t px-3 py-3">
-          <ThemeToggle />
-        </div>
+        {/* The sidebar footer is gone: the Sign out button went with the login
+            screen (10.1), and the theme toggle went when the app was pinned to
+            light (10.6). Nothing is left to put here, so there is no empty bar. */}
       </aside>
     </>
   );
 }
 
-// Theme toggle: the source of truth is the `data-theme` stamp the pre-paint script
-// (in layout.tsx) already put on <html>, so we read the DOM rather than syncing
-// external state into React via an effect (set-state-in-effect rule). A tick
-// counter forces a re-render after we flip the DOM.
-function ThemeToggle() {
-  const [, force] = useState(0);
-  const dark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
-
-  function toggle() {
-    const next = !dark;
-    const root = document.documentElement;
-    root.dataset.theme = next ? "dark" : "light";
-    root.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-    force((n) => n + 1);
-  }
-
-  return (
-    <Button variant="ghost" size="sm" onClick={toggle} aria-label="Toggle theme" className="px-2">
-      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
-  );
-}
 
