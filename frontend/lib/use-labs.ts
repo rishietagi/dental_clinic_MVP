@@ -6,8 +6,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type LabVendor = {
   id: string;
   name: string;
@@ -19,16 +17,12 @@ export type LabVendor = {
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 type State =
@@ -50,8 +44,7 @@ export function useLabs(includeInactive = false): State & { refetch: () => void 
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
         const url = new URL(`${apiUrl}/labs`);
         if (includeInactive) url.searchParams.set("include_inactive", "true");
         const res = await fetch(url, { headers });
@@ -86,8 +79,7 @@ export async function createLab(body: {
 }): Promise<LabResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(`${apiUrl}/labs`, {
       method: "POST",
       headers,
@@ -116,8 +108,7 @@ export async function setLabActive(
 ): Promise<{ status: "ok" } | { status: "error"; message: string }> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(`${apiUrl}/labs/${id}/${active ? "activate" : "deactivate"}`, {
       method: "POST",
       headers,

@@ -21,7 +21,9 @@ WHAT IT DOES TO YOUR DATA
 AUTH
     Auth is overridden, not performed: `app.dependency_overrides[get_current_claims]`
     is pointed at a staff row, exactly as the pytest suite does. That lets the script
-    switch roles mid-walk (`as_role("receptionist")`) to prove the 6.12 money split.
+    switch which staff row is acting mid-walk (`as_role("receptionist")`).
+    Since 10.1 there is no authentication, so the roles differ only in what the
+    staff_user row says — nothing is refused. The checks assert that.
 
     *** The override is cleared ONCE, at the very end, in a finally block. ***
     In 6.11 checks were appended after a mid-script teardown and every one of them
@@ -140,6 +142,9 @@ def build_fixtures(db) -> dict:
         "scaling": scaling,
         "medicine": medicine,
         "lab": lab,
+        # Catalogue rows created DURING the walk (not up front), so cleanup can
+        # find them. Populated by the no-role-gate section.
+        "extra_item_ids": [],
     }
 
 
@@ -177,11 +182,9 @@ def cleanup(db, fx: dict) -> None:
     wipe(select(Patient).where(Patient.id == patient_id))
     wipe(select(LabCase).where(LabCase.lab_id == fx["lab"].id))
     wipe(select(Lab).where(Lab.id == fx["lab"].id))
-    wipe(
-        select(TreatmentItem).where(
-            TreatmentItem.id.in_([fx["rct"].id, fx["scaling"].id, fx["medicine"].id])
-        )
-    )
+    item_ids = [fx["rct"].id, fx["scaling"].id, fx["medicine"].id]
+    item_ids += [uuid.UUID(i) for i in fx.get("extra_item_ids", [])]
+    wipe(select(TreatmentItem).where(TreatmentItem.id.in_(item_ids)))
     wipe(select(StaffUser).where(StaffUser.id.in_(staff_ids)))
 
 
@@ -457,24 +460,24 @@ def run(fx: dict) -> None:
         any(p["id"] == patient_id for p in recalls.json()["items"]),
     )
 
-    # 9. The 6.12 money split -------------------------------------------------
-    section("Money is admin-only (6.12)")
-    for role in ("receptionist", "dentist"):
+    # 9. Everything is reachable — there are no roles any more (10.1) ---------
+    section("No auth: every screen is reachable (10.1)")
+    # 6.12 put reports + the day total behind admin; 10.1 removed authentication
+    # entirely, so all three roles now reach everything. The Reports *UI* is
+    # hidden instead (10.2) — the API stays open and tested.
+    for role in ("receptionist", "dentist", "admin"):
         as_role(staff, role)
-        check(f"{role} is refused /reports", client.get("/reports").status_code == 403)
+        check(f"{role} reaches /reports", client.get("/reports").status_code == 200)
         check(
-            f"{role} is refused today's collections",
-            client.get("/invoices/collections").status_code == 403,
+            f"{role} reaches today's collections",
+            client.get("/invoices/collections").status_code == 200,
         )
         check(
-            f"{role} can STILL read an invoice (billing is front-desk)",
+            f"{role} reaches an invoice",
             client.get(f"/invoices/{invoice_id}").status_code == 200,
         )
 
-    as_role(staff, "admin")
-    check("admin sees /reports", client.get("/reports").status_code == 200)
     coll = client.get("/invoices/collections")
-    check("admin sees today's collections", coll.status_code == 200)
     check(
         "collections carries all three modes",
         coll.status_code == 200 and set(coll.json()["by_mode"]) == {"cash", "card", "upi"},
@@ -486,34 +489,35 @@ def run(fx: dict) -> None:
         and set(rep.json()) == {"revenue_trend", "procedure_mix", "no_show", "by_dentist"},
     )
 
-    # 10. Clinical writes stay dentist-gated ----------------------------------
-    section("Clinical writes stay role-split")
+    # 10. Clinical writes are open too, and still WORK ------------------------
+    section("Clinical writes work for any staff row (10.1)")
+    # These were dentist-gated from 4.3 until 10.1. What matters now is not that
+    # they are refused, but that they still work correctly for whoever is here.
     as_role(staff, "receptionist")
-    denied = client.post(
+    allowed = client.post(
         "/visits",
         json={
             "patient_id": patient_id,
-            "treatment": {"title": "should not work"},
-            "treatment_status": "in_progress",
-            "procedures": [],
+            "treatment": {"title": f"{TAG} walk-in cleaning"},
+            "treatment_status": "completed",
+            "procedures": [{"treatment_item_id": str(fx["scaling"].id)}],
         },
     )
-    check("receptionist cannot record a visit", denied.status_code == 403)
+    check("a visit can be recorded with no role gate", allowed.status_code == 201,
+          allowed.text[:200])
     check(
-        "receptionist cannot write the chart",
+        "the chart can be written with no role gate",
         client.post(
             f"/patients/{patient_id}/chart",
             json={"entries": [{"tooth": "11", "condition": "caries"}]},
-        ).status_code
-        == 403,
+        ).status_code == 201,
     )
-    check(
-        "receptionist cannot edit the price list",
-        client.post(
-            "/treatment-items", json={"name": f"{TAG} nope", "default_price": "1.00"}
-        ).status_code
-        == 403,
+    priced = client.post(
+        "/treatment-items", json={"name": f"{TAG} new item", "default_price": "1.00"}
     )
+    check("the price list can be edited with no role gate", priced.status_code == 201)
+    if priced.status_code == 201:
+        fx["extra_item_ids"].append(priced.json()["id"])
 
     # 11. Soft delete ---------------------------------------------------------
     section("Soft delete")

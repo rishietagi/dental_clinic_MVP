@@ -7,8 +7,6 @@
 
 import { useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type Patient = {
   id: string;
   name: string;
@@ -46,15 +44,7 @@ export function usePatient(patientId: string): State {
 
     (async () => {
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/patients/${patientId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/patients/${patientId}`);
 
         if (res.status === 404) {
           if (!cancelled) setState({ kind: "not-found" });

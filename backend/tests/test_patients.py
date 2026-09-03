@@ -1,8 +1,8 @@
 """Endpoint tests for the patient CRUD API.
 
-DB-backed. Auth is faked the same way as test_auth.py: override get_current_claims
-to a `{"sub": <staff id>}` dict and create that staff row, so get_current_staff
-resolves without a real ES256 token. Skips fast if no database is reachable.
+DB-backed. There is no authentication since 10.1; `get_current_claims` is
+overridden to name the staff row this test created, so every write is attributed
+to it. Skips fast if no database is reachable.
 """
 
 import uuid
@@ -21,11 +21,6 @@ from app.models.patient import Patient
 from app.models.staff_user import StaffUser
 
 client = TestClient(app)
-
-
-def test_create_requires_auth():
-    # No token / no override -> the auth dependency rejects it.
-    assert client.post("/patients", json={"name": "X"}).status_code in (401, 403)
 
 
 @pytest.fixture(scope="module")
@@ -165,10 +160,6 @@ def test_archive_and_unarchive_are_soft(as_staff):
 
 
 # --- list + search -----------------------------------------------------------
-
-def test_list_requires_auth():
-    assert client.get("/patients").status_code in (401, 403)
-
 
 def test_search_by_name_and_phone(as_staff):
     client, _ = as_staff

@@ -4,8 +4,6 @@
 // since 2.2, but there was no UI for it — the app had no "Add patient" button.
 // Any active staff may register a patient.
 
-import { createClient } from "@/lib/supabase/client";
-
 export type PatientCreateBody = {
   name: string;
   phone?: string | null;
@@ -28,16 +26,9 @@ export async function createPatient(
 ): Promise<CreatePatientResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { status: "error", message: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/patients`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),

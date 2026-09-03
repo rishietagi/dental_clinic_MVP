@@ -33,10 +33,6 @@ from app.models.tooth_condition import (
 client = TestClient(app)
 
 
-def test_requires_auth():
-    assert client.get(f"/patients/{uuid.uuid4()}/chart").status_code in (401, 403)
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -295,16 +291,6 @@ def test_chart_narrows_to_one_patient(ctx):
 
 
 # --- role split --------------------------------------------------------------
-
-def test_receptionist_can_read_but_not_write(ctx):
-    """Reads are front-desk (history alongside billing); what is wrong with a
-    tooth is a clinical judgement — the same split as visits (4.3)."""
-    _mark(ctx, [{"tooth": "16", "condition": "caries"}])
-
-    ctx.act_as(ctx.recep)
-    assert ctx.client.get(f"/patients/{ctx.patient.id}/chart").status_code == 200
-    assert _mark(ctx, [{"tooth": "26", "condition": "filled"}]).status_code == 403
-
 
 def test_chart_update_is_audited(ctx):
     _mark(ctx, [{"tooth": "16", "condition": "caries"}])

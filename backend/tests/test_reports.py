@@ -4,7 +4,8 @@ Two layers:
 - **Service unit tests** (`revenue_trend` / `procedure_mix` / `no_show_rate`) against
   crafted rows, using deltas so the shared DB's other data doesn't pollute absolute
   totals. The clinic tz is pinned to a fixed zone for the run and restored.
-- **Endpoint tests** for the role split (receptionist 403, dentist 200) and shape.
+- **Endpoint tests** for the response shape. The 6.12 role split (receptionist and
+  dentist 403) was removed in 10.1 along with authentication.
 
 Cleanup is child-first (payment -> invoice_line -> invoice -> visit -> treatment ->
 appointment/item -> patient), committing per delete like the other suites.
@@ -285,42 +286,6 @@ def _staff(roles):
     s.commit()
     s.close()
     return staff
-
-
-def test_requires_auth():
-    assert client.get("/reports").status_code in (401, 403)
-
-
-def test_receptionist_forbidden(db_available):
-    staff = _staff(["receptionist"])
-    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
-    try:
-        assert client.get("/reports").status_code == 403
-    finally:
-        app.dependency_overrides.clear()
-        s = SessionLocal()
-        s.delete(s.get(StaffUser, staff.id))
-        s.commit()
-        s.close()
-
-
-def test_dentist_forbidden(db_available):
-    """A plain dentist login must NOT see the practice's revenue (6.12).
-
-    This is the actual change in 6.12 — reports were dentist+admin from 6.1 until
-    the clinic moved to one login per role. A dentist signing in to record clinical
-    work has no reason to see what the practice earned.
-    """
-    staff = _staff(["dentist"])
-    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(staff.id)}
-    try:
-        assert client.get("/reports").status_code == 403
-    finally:
-        app.dependency_overrides.clear()
-        s = SessionLocal()
-        s.delete(s.get(StaffUser, staff.id))
-        s.commit()
-        s.close()
 
 
 def test_admin_gets_report_shape(db_available):

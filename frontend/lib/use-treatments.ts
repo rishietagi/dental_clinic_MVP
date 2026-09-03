@@ -11,7 +11,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
 import type { MutationResult } from "@/lib/use-treatment-items";
 
 export type Treatment = {
@@ -70,18 +69,10 @@ export function usePatientTreatments(
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
         const query = new URLSearchParams({ patient_id: patientId });
         if (openOnly) query.set("status", "in_progress");
 
-        const res = await fetch(`${apiUrl}/treatments?${query}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/treatments?${query}`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Result;
@@ -117,15 +108,8 @@ async function transition(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/treatments/${treatmentId}/${action}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${session.access_token}` },
     });
 
     if (res.ok) return "ok";
@@ -156,16 +140,9 @@ export async function setTreatmentPhase(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/treatments/${treatmentId}/phase`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ phase }),
@@ -220,15 +197,7 @@ export function useNeedsFollowUp(): NeedsFollowUpState & { refetch: () => void }
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/treatments/needs-follow-up`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/treatments/needs-follow-up`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as NeedsFollowUpResult;

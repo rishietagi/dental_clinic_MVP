@@ -9,8 +9,6 @@
 
 import { useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type PatientListItem = {
   id: string;
   name: string;
@@ -45,19 +43,11 @@ export function usePatientSearch(query: string): State {
       // effect body — that trips react-hooks/set-state-in-effect.
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
         const params = new URLSearchParams();
         const term = query.trim();
         if (term) params.set("q", term);
 
-        const res = await fetch(`${apiUrl}/patients?${params.toString()}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/patients?${params.toString()}`);
         if (!res.ok) throw new Error(`Search failed (${res.status}).`);
 
         const data = (await res.json()) as Result;

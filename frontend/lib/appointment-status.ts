@@ -7,8 +7,6 @@
 // (app/services/appointments.py) so the UI only offers legal buttons — but the
 // API is the real guard (an illegal POST returns 409 regardless of the UI).
 
-import { createClient } from "@/lib/supabase/client";
-
 export const STATUSES = ["booked", "arrived", "done", "cancelled", "no_show"] as const;
 export type Status = (typeof STATUSES)[number];
 
@@ -62,16 +60,9 @@ export async function changeStatus(
 ): Promise<"ok" | "conflict" | { error: string }> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/appointments/${id}/status`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ status }),

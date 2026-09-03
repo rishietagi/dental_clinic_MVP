@@ -40,11 +40,6 @@ from app.models.visit import Visit
 client = TestClient(app)
 
 
-def test_requires_auth():
-    assert client.get("/visits?patient_id=" + str(uuid.uuid4())).status_code in (401, 403)
-    assert client.post("/visits", json={}).status_code in (401, 403)
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -343,27 +338,6 @@ def test_unknown_item_writes_nothing(as_dentist):
 
 
 # --- the role split ----------------------------------------------------------
-
-def test_receptionist_cannot_record_visits(as_receptionist):
-    """Reads yes, writes no — enforced on the API, not just hidden in the UI."""
-    ctx = as_receptionist
-
-    # A visit to read, created directly (the API would reject this role).
-    treatment = Treatment(patient_id=ctx.patient.id, title="Existing")
-    ctx.db.add(treatment)
-    ctx.db.commit()
-    visit = Visit(patient_id=ctx.patient.id, treatment_id=treatment.id)
-    ctx.db.add(visit)
-    ctx.db.commit()
-
-    assert ctx.client.get(f"/visits/{visit.id}").status_code == 200
-    assert ctx.client.get(f"/visits?patient_id={ctx.patient.id}").status_code == 200
-
-    assert ctx.client.post("/visits", json=_body(ctx)).status_code == 403
-    assert ctx.client.patch(
-        f"/visits/{visit.id}", json={"clinical_notes": "nope"}
-    ).status_code == 403
-
 
 # --- procedures, reads, updates ----------------------------------------------
 

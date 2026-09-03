@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
 import type { AppointmentListItem } from "@/lib/use-day-appointments";
 import { weekDays } from "@/lib/week";
 
@@ -41,15 +40,7 @@ export function useWeekAppointments(weekStart: string): State & { refetch: () =>
         const from = days[0];
         const to = days[days.length - 1];
 
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/appointments?from=${from}&to=${to}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/appointments?from=${from}&to=${to}`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Result;
@@ -79,16 +70,9 @@ export async function rescheduleAppointment(
 ): Promise<"ok" | "conflict" | { error: string }> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/appointments/${id}`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ start_time: startTimeIso }),

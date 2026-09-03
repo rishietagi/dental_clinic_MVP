@@ -10,8 +10,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type FileKind = "xray" | "photo" | "document";
 
 export type PatientFile = {
@@ -37,13 +35,12 @@ type State =
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return { Authorization: `Bearer ${session.access_token}` };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 export function usePatientFiles(patientId: string): State & { refetch: () => void } {
@@ -60,8 +57,7 @@ export function usePatientFiles(patientId: string): State & { refetch: () => voi
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/patients/${patientId}/files`, { headers });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
@@ -96,8 +92,7 @@ export async function uploadPatientFile(
 ): Promise<UploadResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const form = new FormData();
     form.append("file", file);
@@ -134,8 +129,7 @@ export async function archivePatientFile(
 ): Promise<{ status: "ok" } | { status: "error"; message: string }> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const res = await fetch(`${apiUrl}/files/${fileId}/archive`, { method: "POST", headers });
     if (res.ok) return { status: "ok" };
@@ -153,7 +147,7 @@ export async function archivePatientFile(
 // signed in or the fetch fails.
 export async function fetchFileBlobUrl(fileId: string): Promise<string | null> {
   if (!apiUrl) return null;
-  const headers = await authHeaders();
+  const headers = authHeaders();
   if (!headers) return null;
   const res = await fetch(`${apiUrl}/files/${fileId}/content`, { headers });
   if (!res.ok) return null;

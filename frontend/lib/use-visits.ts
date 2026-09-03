@@ -15,8 +15,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type ProcedureRead = {
   id: string;
   treatment_item_id: string;
@@ -123,16 +121,12 @@ type State =
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 export function usePatientVisits(
@@ -153,8 +147,7 @@ export function usePatientVisits(
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/visits?patient_id=${patientId}`, {
           headers,
@@ -200,8 +193,7 @@ export function useVisit(visitId: string): VisitState {
 
     (async () => {
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/visits/${visitId}`, { headers });
         if (res.status === 404) {
@@ -244,8 +236,7 @@ export async function recordVisit(
 ): Promise<RecordVisitResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const res = await fetch(`${apiUrl}/visits`, {
       method: "POST",

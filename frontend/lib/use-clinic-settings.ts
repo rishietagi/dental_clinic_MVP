@@ -13,7 +13,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
 import type { MutationResult } from "@/lib/use-treatment-items";
 
 export type ClinicSettings = {
@@ -61,15 +60,7 @@ export function useClinicSettings(): {
 
     (async () => {
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/clinic-settings`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/clinic-settings`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as ClinicSettings;
@@ -101,16 +92,9 @@ export async function updateClinicSettings(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/clinic-settings`, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(changes),

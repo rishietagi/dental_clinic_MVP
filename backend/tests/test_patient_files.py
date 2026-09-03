@@ -38,12 +38,6 @@ client = TestClient(app)
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"fake-image-data" * 4
 
 
-def test_requires_auth():
-    pid = uuid.uuid4()
-    assert client.get(f"/patients/{pid}/files").status_code in (401, 403)
-    assert client.get(f"/files/{uuid.uuid4()}/content").status_code in (401, 403)
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -149,12 +143,6 @@ def test_dentist_can_upload_and_stream_back(as_dentist):
     assert content.status_code == 200
     assert content.headers["content-type"].startswith("image/png")
     assert content.content == _PNG_BYTES
-
-
-def test_receptionist_cannot_upload(as_receptionist):
-    ctx = as_receptionist
-    resp = _upload(ctx)
-    assert resp.status_code == 403, resp.text
 
 
 def test_receptionist_can_list(as_receptionist):

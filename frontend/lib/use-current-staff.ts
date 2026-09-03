@@ -1,16 +1,14 @@
 "use client";
 
-// Fetches the signed-in staff member (id, email, name, roles, active) from the
-// backend's /me endpoint. Roles come from OUR database, not the Supabase token,
-// so they're always current.
+// Fetches the local staff member (id, email, name, roles, active) from the
+// backend's /me endpoint.
 //
-// The call goes browser -> Caddy /api -> backend, exactly like health-card.tsx.
-// We attach the Supabase access token as a Bearer header; the backend verifies
-// it (ES256 via JWKS) and looks up the staff row.
+// Since 10.1 there is no authentication: the backend resolves the single local
+// staff row itself (LOCAL_STAFF_ID), so this is a plain unauthenticated fetch.
+// Roles still come back and still drive which nav items show — they are simply
+// never used to REFUSE anything (see backend app/auth.py).
 
 import { useEffect, useState } from "react";
-
-import { createClient } from "@/lib/supabase/client";
 
 export type CurrentStaff = {
   id: string;
@@ -39,20 +37,7 @@ export function useCurrentStaff(): State {
 
     (async () => {
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) {
-          // The proxy guard normally prevents this, but handle it defensively.
-          if (!cancelled) setState({ kind: "not-staff" });
-          return;
-        }
-
-        const res = await fetch(`${apiUrl}/me`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/me`);
 
         if (res.status === 403) {
           if (!cancelled) setState({ kind: "not-staff" });

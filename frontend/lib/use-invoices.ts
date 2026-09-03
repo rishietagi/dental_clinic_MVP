@@ -10,8 +10,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type InvoiceLine = {
   id: string;
   treatment_item_id: string | null;
@@ -46,16 +44,12 @@ export type InvoiceLineInput = { description: string; amount: string };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 type InvoiceState =
@@ -79,8 +73,7 @@ export function useInvoice(invoiceId: string): InvoiceState & { refetch: () => v
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/invoices/${invoiceId}`, { headers });
         if (res.status === 404) {
@@ -134,8 +127,7 @@ export function useTodaysCollections(): CollectionsState & { refetch: () => void
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/invoices/collections`, { headers });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
@@ -196,8 +188,7 @@ export function useInvoiceList(
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const url = new URL(`${apiUrl}/invoices`);
         if (statusFilter) url.searchParams.set("status", statusFilter);
@@ -246,8 +237,7 @@ export function useVisitInvoice(visitId: string): VisitInvoiceState & { refetch:
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const res = await fetch(`${apiUrl}/visits/${visitId}/invoice`, { headers });
         if (res.status === 404) {
@@ -288,8 +278,7 @@ export async function generateInvoice(
 ): Promise<GenerateResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const res = await fetch(`${apiUrl}/visits/${visitId}/invoice`, {
       method: "POST",
@@ -318,8 +307,7 @@ export async function recordPayment(
 ): Promise<PaymentResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const res = await fetch(`${apiUrl}/invoices/${invoiceId}/payments`, {
       method: "POST",

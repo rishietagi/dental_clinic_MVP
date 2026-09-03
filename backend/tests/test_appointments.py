@@ -37,17 +37,6 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def test_create_requires_auth():
-    assert client.post("/appointments", json={}).status_code in (401, 403)
-
-
-def test_list_requires_auth():
-    assert client.get("/appointments", params={"date": "2030-08-02"}).status_code in (
-        401,
-        403,
-    )
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -568,12 +557,6 @@ def test_reschedule_self_no_false_conflict(as_staff):
 
 def _status(client, appt_id, status):
     return client.post(f"/appointments/{appt_id}/status", json={"status": status})
-
-
-def test_status_requires_auth():
-    assert client.post(
-        f"/appointments/{uuid.uuid4()}/status", json={"status": "arrived"}
-    ).status_code in (401, 403)
 
 
 def test_status_happy_path(as_staff):

@@ -13,7 +13,6 @@
 // Double-booking is guaranteed by the DB's appointment_no_overlap constraint;
 // this helper just surfaces the 409 the API already returns.
 
-import { createClient } from "@/lib/supabase/client";
 import type { MutationResult } from "@/lib/use-treatment-items";
 
 export type AppointmentCreateBody = {
@@ -33,16 +32,9 @@ export async function bookAppointment(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return { error: "Not signed in." };
-
     const res = await fetch(`${apiUrl}/appointments`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),

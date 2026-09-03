@@ -40,12 +40,6 @@ from app.models.visit import Visit
 client = TestClient(app)
 
 
-def test_requires_auth():
-    assert client.get("/labs").status_code in (401, 403)
-    assert client.get("/lab-cases").status_code in (401, 403)
-    assert client.post("/lab-cases", json={}).status_code in (401, 403)
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -160,12 +154,6 @@ def test_admin_creates_lab_and_lists(ctx):
 def test_duplicate_lab_name_conflicts(ctx):
     resp = ctx.client.post("/labs", json={"name": ctx.lab.name})
     assert resp.status_code == 409
-
-
-def test_receptionist_cannot_create_lab(ctx):
-    ctx.act_as(ctx.recep)
-    resp = ctx.client.post("/labs", json={"name": f"Nope {uuid.uuid4().hex[:6]}"})
-    assert resp.status_code == 403
 
 
 def test_deactivated_lab_leaves_the_picker(ctx):

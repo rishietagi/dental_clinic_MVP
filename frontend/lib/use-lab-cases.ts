@@ -9,8 +9,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type SampleType =
   | "crown"
   | "bridge"
@@ -121,16 +119,12 @@ export function duePhrase(expected: string | null): string {
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 type ListState =
@@ -155,8 +149,7 @@ export function useLabCases(opts: { status?: string; patientId?: string } = {}):
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
         const url = new URL(`${apiUrl}/lab-cases`);
         if (status) url.searchParams.set("status", status);
         if (patientId) url.searchParams.set("patient_id", patientId);
@@ -199,8 +192,7 @@ export function useLabDashboard(): DashState & { refetch: () => void } {
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
         const res = await fetch(`${apiUrl}/lab-cases/dashboard`, { headers });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
         const data = (await res.json()) as LabDashboard;
@@ -254,8 +246,7 @@ export async function dismissFollowUp(id: string, done = true): Promise<LabCaseR
 async function post(url: string, body: unknown): Promise<LabCaseResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(url, {
       method: "POST",
       headers,

@@ -12,8 +12,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 // 'treatment' (a dental procedure) or 'medicine'. The clinic's third charge,
 // the consultation fee, is per-dentist and lives on the staff record instead —
 // see lib/use-staff.ts.
@@ -40,16 +38,12 @@ export type MutationResult = "ok" | "forbidden" | "conflict" | { error: string }
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 // Maps a mutation response to the shared result shape.
@@ -80,8 +74,7 @@ export function useTreatmentItems(
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
 
         const params = new URLSearchParams({
           include_inactive: String(includeInactive),
@@ -120,8 +113,7 @@ export async function createItem(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { error: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(`${apiUrl}/treatment-items`, {
       method: "POST",
       headers,
@@ -139,8 +131,7 @@ export async function updateItem(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { error: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(`${apiUrl}/treatment-items/${id}`, {
       method: "PATCH",
       headers,
@@ -158,8 +149,7 @@ export async function setItemActive(
 ): Promise<MutationResult> {
   if (!apiUrl) return { error: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { error: "Not signed in." };
+    const headers = authHeaders();
     const res = await fetch(
       `${apiUrl}/treatment-items/${id}/${active ? "activate" : "deactivate"}`,
       { method: "POST", headers },

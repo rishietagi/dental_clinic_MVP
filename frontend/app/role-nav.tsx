@@ -1,3 +1,7 @@
+// SUPERSEDED by components/app-shell.tsx in 6.2 — this file is not imported
+// anywhere. Left in place (rather than deleted) as it has been since 6.2.
+// Its Reports entry is inert; the live nav is in app-shell.tsx (hidden in 10.2).
+
 "use client";
 
 // Role-aware navigation. It fetches the signed-in staff member's roles from the

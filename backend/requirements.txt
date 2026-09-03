@@ -16,11 +16,9 @@ sqlalchemy==2.0.51
 alembic==1.18.5
 psycopg[binary]==3.3.4
 
-# Auth — verify Supabase's ES256 access tokens against their JWKS endpoint.
-# PyJWT's PyJWKClient fetches + caches the public keys; cryptography does the
-# elliptic-curve signature check (ES256).
-pyjwt[crypto]==2.13.0
-cryptography==49.0.0
+# Auth — REMOVED in 10.1. The app has no login: it is a single-user desktop app
+# behind Windows' own sign-in, so there are no tokens to verify. pyjwt and
+# cryptography went with the Supabase dependency. See app/auth.py.
 
 # Tests
 pytest==9.1.1

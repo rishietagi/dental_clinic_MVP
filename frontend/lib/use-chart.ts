@@ -8,20 +8,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-async function authHeaders(): Promise<Record<string, string> | null> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
+// Request headers. Since 10.1 there is no authentication — the backend runs on
+// this same machine and has no login — so this only sets the content type.
+// Kept as a function (rather than inlined) so every call site stayed unchanged,
+// and so re-adding a header later is a one-place edit.
+function authHeaders(): Record<string, string> {
+  return { "Content-Type": "application/json" };
 }
 
 export type ToothConditionName =
@@ -118,8 +112,7 @@ export function useChart(patientId: string): State & { refetch: () => void } {
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const headers = await authHeaders();
-        if (!headers) throw new Error("Not signed in.");
+        const headers = authHeaders();
         const res = await fetch(`${apiUrl}/patients/${patientId}/chart`, { headers });
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
         const data = (await res.json()) as { items: ToothCondition[] };
@@ -158,8 +151,7 @@ export async function markTeeth(
 ): Promise<ChartResult> {
   if (!apiUrl) return { status: "error", message: "NEXT_PUBLIC_API_URL is not set." };
   try {
-    const headers = await authHeaders();
-    if (!headers) return { status: "error", message: "Not signed in." };
+    const headers = authHeaders();
 
     const res = await fetch(`${apiUrl}/patients/${patientId}/chart`, {
       method: "POST",
@@ -186,7 +178,7 @@ export async function toothHistory(
   tooth: string,
 ): Promise<ToothCondition[]> {
   if (!apiUrl) return [];
-  const headers = await authHeaders();
+  const headers = authHeaders();
   if (!headers) return [];
   const res = await fetch(`${apiUrl}/patients/${patientId}/chart/${tooth}/history`, {
     headers,

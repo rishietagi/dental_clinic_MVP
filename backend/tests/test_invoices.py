@@ -1,7 +1,7 @@
 """Endpoint tests for invoice generation + read (step 5.2).
 
-DB-backed, on the test_visits.py template (auth faked by overriding
-get_current_claims; skips fast without a database).
+DB-backed, on the test_visits.py template (override get_current_claims to pick
+which staff row writes are attributed to; skips fast without a database).
 
 The headline tests pin the 5.1/5.2 decisions into behaviour:
 
@@ -12,8 +12,9 @@ The headline tests pin the 5.1/5.2 decisions into behaviour:
 - `test_custom_line_only` — a walk-in with no recorded procedures can still be
   billed by typing a line (the "custom invoice" case).
 - `test_second_generate_conflicts` — one invoice per visit (the UNIQUE).
-- `test_receptionist_can_generate` — billing is front-desk, not role-split like
-  clinical writes.
+- `test_receptionist_can_generate` — billing is front-desk. Role enforcement was
+  removed in 10.1, but the test is kept: it still pins that the billing pipeline
+  works end to end for a non-dentist staff row.
 
 Cleanup runs child-first (payments/lines -> invoices -> procedures -> visits ->
 treatments -> patients) and commits per delete, because SQLAlchemy reorders a
@@ -46,11 +47,6 @@ from app.models.treatment_item import TreatmentItem
 from app.models.visit import Visit
 
 client = TestClient(app)
-
-
-def test_requires_auth():
-    assert client.post(f"/visits/{uuid.uuid4()}/invoice", json={}).status_code in (401, 403)
-    assert client.get(f"/invoices/{uuid.uuid4()}").status_code in (401, 403)
 
 
 @pytest.fixture(scope="module")
@@ -545,13 +541,6 @@ def test_payment_on_unknown_invoice(as_receptionist):
     assert resp.status_code == 404, resp.text
 
 
-def test_payment_requires_auth():
-    resp = client.post(
-        f"/invoices/{uuid.uuid4()}/payments", json={"amount": "100.00", "mode": "cash"}
-    )
-    assert resp.status_code in (401, 403)
-
-
 def test_get_invoice_reflects_payments(as_receptionist):
     ctx = as_receptionist
     inv = _generate(ctx, procedures=[ctx.item_a.id])  # total 4000
@@ -686,22 +675,6 @@ def test_collections_counts_the_clinic_day_not_utc(as_admin):
         db.commit()
 
 
-def test_collections_requires_auth():
-    assert client.get("/invoices/collections").status_code in (401, 403)
-
-
-def test_collections_forbidden_for_receptionist(as_receptionist):
-    """The front desk bills patients but must not see the clinic's day total (6.12)."""
-    ctx = as_receptionist
-    assert ctx.client.get("/invoices/collections").status_code == 403
-
-
-def test_collections_forbidden_for_dentist(as_dentist):
-    """A dentist login records clinical work; the takings are the owner's (6.12)."""
-    ctx = as_dentist
-    assert ctx.client.get("/invoices/collections").status_code == 403
-
-
 def test_collections_not_shadowed_by_id_route(as_admin):
     """'collections' must resolve to the aggregate, not be parsed as an invoice id."""
     ctx = as_admin
@@ -746,10 +719,6 @@ def test_list_invoices_status_filter(as_receptionist):
     assert any(i["id"] == inv["id"] for i in paid)
     unpaid = ctx.client.get("/invoices", params={"status": "unpaid"}).json()["items"]
     assert all(i["id"] != inv["id"] for i in unpaid)
-
-
-def test_list_invoices_requires_auth():
-    assert client.get("/invoices").status_code in (401, 403)
 
 
 def test_list_not_shadowed_by_id_route(as_receptionist):

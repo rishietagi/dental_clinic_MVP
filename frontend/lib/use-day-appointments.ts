@@ -8,8 +8,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type AppointmentListItem = {
   id: string;
   patient_id: string;
@@ -50,15 +48,7 @@ export function useDayAppointments(date: string): State & { refetch: () => void 
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/appointments?date=${date}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/appointments?date=${date}`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Result;
@@ -102,15 +92,7 @@ export function usePatientAppointments(
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
-        const res = await fetch(`${apiUrl}/appointments?patient_id=${patientId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(`${apiUrl}/appointments?patient_id=${patientId}`);
         if (!res.ok) throw new Error(`Request failed (${res.status}).`);
 
         const data = (await res.json()) as Result;

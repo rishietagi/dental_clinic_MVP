@@ -33,11 +33,6 @@ from app.models.visit import Visit
 client = TestClient(app)
 
 
-def test_requires_auth():
-    assert client.get(f"/treatments?patient_id={uuid.uuid4()}").status_code in (401, 403)
-    assert client.get(f"/treatments/{uuid.uuid4()}").status_code in (401, 403)
-
-
 @pytest.fixture(scope="module")
 def db_available() -> bool:
     probe = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
@@ -294,33 +289,6 @@ def test_close_reopen_are_audited(ctx):
     assert close_row.details == {"from": "in_progress", "to": "completed"}
 
 
-def test_receptionist_cannot_change_lifecycle(ctx):
-    """Reads yes, close/reopen no — enforced on the API, not just hidden in UI."""
-    t = _make(ctx, "Front-desk attempt")
-
-    # Swap the acting staff to a receptionist for this test.
-    recep = StaffUser(
-        id=uuid.uuid4(),
-        name="Test Receptionist",
-        email=f"{uuid.uuid4()}@clinic.local",
-        roles=["receptionist"],
-        active=True,
-    )
-    ctx.db.add(recep)
-    ctx.db.commit()
-    app.dependency_overrides[get_current_claims] = lambda: {"sub": str(recep.id)}
-    try:
-        assert ctx.client.get(f"/treatments?patient_id={ctx.patient.id}").status_code == 200
-        assert ctx.client.get(f"/treatments/{t.id}").status_code == 200
-        assert ctx.client.post(f"/treatments/{t.id}/close").status_code == 403
-        assert ctx.client.post(f"/treatments/{t.id}/reopen").status_code == 403
-    finally:
-        # Restore the dentist so the fixture's cleanup (keyed to it) still runs.
-        app.dependency_overrides[get_current_claims] = lambda: {"sub": str(ctx.staff.id)}
-        ctx.db.delete(ctx.db.get(StaffUser, recep.id))
-        ctx.db.commit()
-
-
 # --- needs-follow-up report (step 4.8) ---------------------------------------
 
 def _appt(ctx, treatment, *, days_from_now: float, status: str = "booked") -> Appointment:
@@ -339,10 +307,6 @@ def _needs_follow_up_ids(ctx) -> set:
     resp = ctx.client.get("/treatments/needs-follow-up")
     assert resp.status_code == 200, resp.text
     return {row["id"] for row in resp.json()["items"]}
-
-
-def test_needs_follow_up_requires_auth():
-    assert client.get("/treatments/needs-follow-up").status_code in (401, 403)
 
 
 def test_open_treatment_with_no_appointment_is_flagged(ctx):

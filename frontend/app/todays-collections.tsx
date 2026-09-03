@@ -16,7 +16,7 @@
 // string via formatMoney — never float arithmetic.
 
 import { formatMoney, useTodaysCollections } from "@/lib/use-invoices";
-import { useCurrentStaff } from "@/lib/use-current-staff";
+// (useCurrentStaff import removed with the role gate in 10.2)
 
 const MODE_LABELS: Record<string, string> = {
   cash: "Cash",
@@ -24,18 +24,19 @@ const MODE_LABELS: Record<string, string> = {
   upi: "UPI",
 };
 
+// HIDDEN in 10.2, together with the Reports page. This is the practice's daily
+// takings, and the app now runs on one shared PC at the front desk — a role gate
+// cannot keep it private when whoever is sitting there is "signed in".
+//
+// The endpoint (GET /invoices/collections), the service and their tests are all
+// untouched; only this card is withheld. Return <CollectionsCard /> to restore it.
 export function TodaysCollections() {
-  const staffState = useCurrentStaff();
-
-  // Render nothing at all for non-admins — including while roles are still
-  // loading, so the card never flashes in and then vanishes.
-  if (staffState.kind !== "staff" || !staffState.staff.roles.includes("admin")) {
-    return null;
-  }
-
-  return <CollectionsCard />;
+  return null;
 }
 
+// Kept intact so 10.2 is reversible: restoring the card is returning this from
+// TodaysCollections above.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function CollectionsCard() {
   const state = useTodaysCollections();
 

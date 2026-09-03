@@ -12,8 +12,6 @@
 
 import { useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-
 export type RevenuePoint = { month: string; total: string };
 export type ProcedureMixRow = { name: string; count: number; revenue: string };
 export type NoShowSummary = {
@@ -60,18 +58,10 @@ export function useReports(dentistId?: string): State {
     (async () => {
       if (!cancelled) setState({ kind: "loading" });
       try {
-        const supabase = createClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not signed in.");
-
         const url = new URL(`${apiUrl}/reports`);
         if (dentistId) url.searchParams.set("dentist_id", dentistId);
 
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(url);
         if (res.status === 403) {
           if (!cancelled) setState({ kind: "forbidden" });
           return;

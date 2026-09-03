@@ -1,18 +1,19 @@
 "use client";
 
 // The app shell (6.2, reworked to a LEFT SIDEBAR in 6.3): a persistent vertical
-// nav rail — clinic name at the top, role-aware nav, theme toggle + sign-out pinned
-// at the bottom — with the page content filling the rest of the width. On small
-// screens the sidebar collapses behind a menu button.
+// nav rail — clinic name at the top, nav, theme toggle pinned at the bottom —
+// with the page content filling the rest of the width. On small screens the
+// sidebar collapses behind a menu button.
 //
-// /login opts out (its own centered card, no session yet), detected by pathname.
+// 10.1 removed the login, so there is no /login route to opt out and no Sign out
+// button. `anyOf` role filtering is kept on the remaining items: roles still exist
+// on the staff row, they are simply never refused (see backend app/auth.py).
 
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
-  BarChart3,
   CalendarDays,
   FlaskConical,
   LayoutDashboard,
@@ -27,7 +28,6 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
 import { useClinicSettings } from "@/lib/use-clinic-settings";
 import { useCurrentStaff } from "@/lib/use-current-staff";
 import { cn } from "@/lib/utils";
@@ -45,10 +45,11 @@ const NAV: NavItem[] = [
   { label: "Calendar", href: "/calendar", icon: CalendarDays },
   { label: "Invoices", href: "/invoices", icon: Receipt },
   { label: "Lab", href: "/lab", icon: FlaskConical },
-  // Admin-only as of 6.12 (was dentist+admin): the practice's revenue is the
-  // owner's view, and the clinic now runs one login per role. The API is the real
-  // guard (require_role("admin") on GET /reports) — hiding the item is convenience.
-  { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["admin"] },
+  // HIDDEN in 10.2. The app now runs on one shared PC at the front desk, so a
+  // role gate cannot keep the practice's revenue private — whoever is sitting
+  // there is "signed in". The Reports API and its tests are untouched; only the
+  // way in is removed. Uncomment this line to bring the page back.
+  // { label: "Reports", href: "/reports", icon: BarChart3, anyOf: ["admin"] },
   // Renamed "Treatments" -> "Pricing" in 6.7: the screen now covers treatments,
   // medicines, and per-dentist consultation fees. The route is unchanged.
   { label: "Pricing", href: "/settings/treatments", icon: Shield, anyOf: ["admin"] },
@@ -58,11 +59,6 @@ const NAV: NavItem[] = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  // /login (and any future bare route) renders without the shell.
-  if (pathname === "/login") {
-    return <>{children}</>;
-  }
 
   return (
     <div className="flex min-h-full">
@@ -171,8 +167,9 @@ function Sidebar({
           ))}
         </nav>
 
-        <div className="flex items-center justify-between gap-2 border-t px-3 py-3">
-          <SignOut />
+        {/* 10.1: the Sign out button went with the login screen — there is no
+            session to end. The theme toggle is all that remains here. */}
+        <div className="flex items-center justify-end gap-2 border-t px-3 py-3">
           <ThemeToggle />
         </div>
       </aside>
@@ -204,17 +201,3 @@ function ThemeToggle() {
   );
 }
 
-function SignOut() {
-  const router = useRouter();
-  async function handle() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.refresh();
-    router.push("/login");
-  }
-  return (
-    <Button variant="outline" size="sm" onClick={handle} className="flex-1">
-      Sign out
-    </Button>
-  );
-}
