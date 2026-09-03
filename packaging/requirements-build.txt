@@ -1,0 +1,9 @@
+# BUILD-ONLY dependencies for packaging the desktop app (Phase 10).
+#
+# Deliberately separate from backend/requirements.txt: PyInstaller is needed to
+# BUILD the installer on a developer machine, never to RUN the app. Bundling it
+# into the runtime deps would ship a build tool to the clinic.
+#
+#   conda run -n dental-clinic pip install -r packaging/requirements-build.txt
+
+pyinstaller==6.16.0

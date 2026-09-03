@@ -5,3 +5,13 @@ node_modules/
 *.pyc
 
 CLAUDE.md
+
+# --- Desktop packaging (Phase 10) ---
+# Bundled PostgreSQL binaries (~126 MB). NOT committed — they are not our code
+# and never change. Re-create with: python packaging/fetch_postgres.py
+pgsql/
+_pg_download.zip
+
+# Build output: the packaged app, and PyInstaller's scratch space.
+dist/
+build/
