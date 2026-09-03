@@ -150,6 +150,33 @@ def build_backend() -> None:
     log(f"backend -> {DIST / 'clinic-backend.exe'}")
 
 
+def build_launcher() -> None:
+    """Freeze the launcher into launcher.exe.
+
+    REQUIRED, not optional. The Tauri shell runs the launcher as a child process;
+    if only launcher.py ships, it falls back to whatever `python` is on PATH —
+    which on a clinic PC is either nothing at all, or (as here) some unrelated
+    Python without fastapi, uvicorn or psycopg installed. The app then starts,
+    shows a splash screen, and silently never comes up.
+
+    Frozen, it depends on nothing outside the install folder.
+    """
+    log("building launcher executable (PyInstaller)")
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--name", "launcher",
+        "--onefile",                 # one small exe; it only orchestrates
+        "--distpath", str(DIST),
+        "--workpath", str(ROOT / "build" / "pyinstaller-launcher"),
+        "--specpath", str(ROOT / "build"),
+        "--console",
+        str(ROOT / "packaging" / "launcher.py"),
+    ]
+    run(cmd, cwd=ROOT)
+    log(f"launcher -> {DIST / 'launcher.exe'}")
+
+
 def copy_postgres() -> None:
     src = ROOT / "pgsql"
     if not src.exists():
@@ -178,8 +205,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--frontend", action="store_true")
     ap.add_argument("--backend", action="store_true")
+    ap.add_argument("--launcher", action="store_true")
     args = ap.parse_args()
-    everything = not (args.frontend or args.backend)
+    everything = not (args.frontend or args.backend or args.launcher)
 
     DIST.mkdir(parents=True, exist_ok=True)
 
@@ -187,10 +215,12 @@ def main() -> int:
         build_frontend()
     if everything or args.backend:
         build_backend()
+    if args.launcher:
+        build_launcher()
     if everything:
+        build_launcher()
         copy_postgres()
         copy_node()
-        shutil.copy2(ROOT / "packaging" / "launcher.py", DIST / "launcher.py")
 
     log(f"done -> {DIST}")
     return 0

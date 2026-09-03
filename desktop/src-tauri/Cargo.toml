@@ -1,0 +1,23 @@
+[package]
+name = "clinic-desktop"
+version = "0.1.0"
+description = "Dental clinic management — desktop shell"
+edition = "2021"
+rust-version = "1.77"
+
+# The shell is a window, not an application: it starts packaging/launcher.py and
+# displays the local app. All logic lives in the Python/TypeScript stack.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+# Smaller binary; this is a wrapper, not a hot path.
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

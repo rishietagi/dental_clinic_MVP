@@ -7,3 +7,7 @@
 #   conda run -n dental-clinic pip install -r packaging/requirements-build.txt
 
 pyinstaller==6.16.0
+
+# Pillow: pads the wide clinic logo into the square source `cargo tauri icon`
+# needs (packaging/make_icon.py). Build-only, like PyInstaller.
+pillow==12.3.0

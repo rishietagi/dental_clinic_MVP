@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Starting…</title>
+    <style>
+      /* Deliberately matches the app's warm/mint palette (design system, 6.2) so
+         the splash does not read as a different program flashing up first. */
+      :root {
+        --bg: #fbf9f6;
+        --fg: #2b2724;
+        --muted: #7a716a;
+        --primary: #2fa39b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #1b1917; --fg: #f2ede7; --muted: #a89f97; }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 1.25rem;
+        background: var(--bg); color: var(--fg);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: center; padding: 2rem;
+      }
+      .spinner {
+        width: 34px; height: 34px; border-radius: 50%;
+        border: 3px solid color-mix(in srgb, var(--primary) 25%, transparent);
+        border-top-color: var(--primary);
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+      h1 { font-size: 1.05rem; font-weight: 600; margin: 0; }
+      p { margin: 0; color: var(--muted); max-width: 30rem; font-size: 0.9rem; }
+      .slow { margin-top: 0.5rem; font-size: 0.85rem; opacity: 0; transition: opacity 0.6s; }
+      .slow.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div class="spinner" role="status" aria-label="Starting"></div>
+    <h1>Starting the clinic app…</h1>
+    <p>This takes a few seconds.</p>
+    <!-- The first launch creates the database and applies migrations, which can
+         take a minute or more. Saying so only after 15s avoids alarming anyone
+         on the normal fast path, while stopping a slow first run looking hung. -->
+    <p class="slow" id="slow">
+      The first time you open the app it sets up its database, so this run takes
+      longer than usual. Please leave this window open.
+    </p>
+    <script>
+      setTimeout(() => document.getElementById("slow").classList.add("show"), 15000);
+    </script>
+  </body>
+</html>

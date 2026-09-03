@@ -15,3 +15,8 @@ _pg_download.zip
 # Build output: the packaged app, and PyInstaller's scratch space.
 dist/
 build/
+
+# Tauri desktop shell (10.4): Rust build output and the generated icon source.
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+icon-src.png
