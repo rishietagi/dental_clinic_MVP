@@ -583,6 +583,11 @@ and executed in Phase 7, once there's something worth deploying.
 > patient records exist. Phase 7 stays purely deployment and resumes at 7.3.
 
 ### PHASE 7 — Deployment research & go live 🔬
+> ⚠️ **SUPERSEDED IN PRACTICE BY PHASE 10 (2026-09-03), but kept intact deliberately.**
+> The clinic went from 2 computers to **one**, which removed the reason to host anything: sharing
+> data between machines was the requirement a server existed to satisfy. 7.1 and 7.2 (the research
+> and the ₹655/mo decision) are **done and still worth reading** — they are why the cloud option was
+> considered and dropped. **7.3–7.6 will not be built.** See Phase 10.
 The research spike you wanted. Do it *here*, with a real app to size.
 
 | 7.1 | **Research spike — DONE.** [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) compares hosting · Postgres · storage on ₹/mo, setup hours, maintenance hours, restore story. Two owner inputs reshaped it: **images stay manual (no cloud storage at all)** and the clinic sees **~3 patients/day**, which puts a 500 MB free Postgres tier ~10 years out. Result: **India residency is free** (DO Bangalore undercuts Hetzner; Supabase Free has Mumbai), and **Vercel is disqualified — its Hobby plan forbids commercial use.** | `docs: add deployment options analysis` |
@@ -618,6 +623,25 @@ The research spike you wanted. Do it *here*, with a real app to size.
 ### PHASE 9 — Optional
 WhatsApp reminders + follow-up nudges · recall reminders
 *(document/X-ray uploads were pulled forward and built in the 5.6 interlude — see the Phase 5 table.)*
+
+### PHASE 10 — The desktop app 💻
+**The scope change that reshaped the project.** One computer at the front desk, one user at a time,
+the dental assistant entering the dentist's notes there too. No sharing, no server, no monthly bill.
+Research behind it: [`SINGLE_MACHINE_OPTIONS.md`](SINGLE_MACHINE_OPTIONS.md) and
+[`ALTERNATIVE_OPTIONS.md`](ALTERNATIVE_OPTIONS.md).
+
+| Step | What it did | Commit |
+|---|---|---|
+| 10.1 | **Authentication removed.** Supabase Auth is a *cloud* service — it made an otherwise offline app need the internet, and a free project **pauses after a week idle**, which would lock the clinic out after a holiday. `auth.py` is the only behavioural change: `require_role` keeps its signature and always passes, so ~20 call sites are untouched. **Attribution survives** — one real `staff_user` row still backs `audit_log.actor_id` and `visit.dentist_id`. **Deliberately reverses 6.12.** | `feat: remove authentication for single-user desktop app` |
+| 10.2 | **Reports UI hidden, backend intact.** A role gate cannot keep revenue private on one shared machine. Nav item, page and the dashboard day-total commented out — never deleted; the API and its tests still pass, so re-enabling is uncommenting. | *(same commit)* |
+| 10.3 | **Runs without Docker.** Bundled **PostgreSQL 16.15** (the zip binaries Postgres publishes for exactly this), backend frozen with PyInstaller, Next.js standalone + Node runtime. `packaging/launcher.py` orders startup and shuts everything down. **Postgres was KEPT rather than migrated to SQLite** — ARRAY, JSONB, three sequences, a partial index, 17 migrations and 327 tests would all have needed rewriting. | `feat: run the clinic app without Docker` |
+| 10.4 | **Tauri shell + NSIS installer.** 77 MB `.exe`, per-user install, no admin. Tauri is **only the window**. `taskkill /T` on close — without it `postgres.exe` survives and locks the data directory so the next launch fails. | `feat: package as a Windows desktop installer` |
+| 10.5 | **Backups + a rehearsed restore.** `backup.exe` archives the database **and** the X-rays (which live on disk, not in Postgres) into one zip; a scheduled task runs it nightly at 21:00. **The restore drill was actually performed** — both wiped, then restored, with patient, chart, paid invoice and X-ray *bytes* verified back. This is 8.3's gate, cleared. | `feat: add backups and a rehearsed restore` |
+| 10.6 | Docs: `INSTALL_GUIDE.md` for the clinic, plus LOG/CLAUDE/BUILD_PLAN. | `docs: record the desktop app` |
+
+> **What this costs, honestly.** Everything now lives on **one disk in one building**. The nightly
+> backup is automatic; **getting a copy off the machine is not** — that is a weekly pen drive, and it
+> is the weakest link in the whole design. If that habit does not hold, automate it before it matters.
 
 ## 11. Non-negotiables
 

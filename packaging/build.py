@@ -177,6 +177,33 @@ def build_launcher() -> None:
     log(f"launcher -> {DIST / 'launcher.exe'}")
 
 
+def build_backup_tool() -> None:
+    """Freeze the backup/restore tool into backup.exe.
+
+    Ships with the app for the same reason the launcher does: it must work on a
+    machine with no Python. It is also what the nightly scheduled task runs, and
+    what recovers the clinic if the disk dies — so it cannot depend on a dev
+    environment that will not exist there.
+    """
+    log("building backup executable (PyInstaller)")
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--name", "backup",
+        "--onefile",
+        "--distpath", str(DIST),
+        "--workpath", str(ROOT / "build" / "pyinstaller-backup"),
+        "--specpath", str(ROOT / "build"),
+        "--console",
+        # backup.py imports launcher.py for the paths and connection settings.
+        "--paths", str(ROOT / "packaging"),
+        "--hidden-import", "launcher",
+        str(ROOT / "packaging" / "backup.py"),
+    ]
+    run(cmd, cwd=ROOT)
+    log(f"backup tool -> {DIST / 'backup.exe'}")
+
+
 def copy_postgres() -> None:
     src = ROOT / "pgsql"
     if not src.exists():
@@ -217,8 +244,10 @@ def main() -> int:
         build_backend()
     if args.launcher:
         build_launcher()
+        build_backup_tool()
     if everything:
         build_launcher()
+        build_backup_tool()
         copy_postgres()
         copy_node()
 

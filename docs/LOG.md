@@ -21,63 +21,39 @@ overhaul · 6.4 logo/invoices-ledger/routing/UI-library · 6.5 manage dentists +
 + navigation · 6.9 reseed by simulation + E2E · 6.10 the OPD clinical record · 6.11 the dental
 chart (odontogram) · **7.1 the deployment research spike (docs only)**.
 
-> ### ➡️ NEXT: Step 7.3 — provision managed Postgres (Supabase, Mumbai) + create THREE logins
+> ### ➡️ THE PROJECT SHIPPED AS A DESKTOP APP — read this before anything else
 >
-> ⚠️ **Read this first: 6.12 and 6.13 were inserted mid-Phase-7** (2026-08-12, owner-requested).
-> The clinic now runs **three role logins**, and **the practice's money is admin-only**:
-> `GET /reports` and `GET /invoices/collections` are `require_role("admin")`. **The dentist role
-> LOST reports** (it had them from 6.1). Per-patient billing deliberately stayed any-active-staff.
-> 6.13 was a full check pass — [`docs/CHECK_REPORT.md`](CHECK_REPORT.md) — which shipped a
-> **permanent E2E harness**: `docker compose run --rm -v "${PWD}\backend:/app" backend python -m
-> scripts.e2e_check` (**75 checks**, creates and deletes its own data). **Run it at the end of every
-> future step** — it is the cheapest regression net the project has, and the two earlier versions of
-> it were throwaways that no longer exist.
+> **Phase 10 (2026-09-03) changed the shape of the project.** The clinic went from **2 computers to
+> 1**, which removed the reason to host anything. The app is now an **installable Windows desktop
+> app**: no login, no server, no internet, no monthly cost.
 >
-> **7.1 AND 7.2 are DONE — both docs-only.** The stack is **decided**:
-> [`docs/DEPLOYMENT_DECISION.md`](DEPLOYMENT_DECISION.md) is the record;
-> [`docs/DEPLOYMENT_OPTIONS.md`](DEPLOYMENT_OPTIONS.md) is the sourced comparison behind it (its §9
-> checklist is now ticked). **7.3 is the first step that spends money and touches a real service.**
+> **Four things a fresh session will otherwise get wrong:**
+> - **There is NO authentication.** `require_role` still wraps endpoints and still *documents* what
+>   was privileged, but it always passes (`backend/app/auth.py`). Do not "fix" it. **This reverses
+>   6.12**, deliberately.
+> - **Reports are hidden, not deleted.** The nav item, page and dashboard day-total are commented
+>   out; the API, service and tests are untouched. Re-enabling is uncommenting.
+> - **Phase 7 (cloud, ₹655/mo) is superseded** but left in `BUILD_PLAN.md` on purpose. 7.1/7.2 are
+>   worth reading for *why* cloud was considered and dropped. **7.3–7.6 will not be built.**
+> - **PostgreSQL was KEPT, not migrated to SQLite.** The app depends on `ARRAY`, `JSONB`, three
+>   sequences and a partial index. Postgres ships as bundled binaries instead.
 >
-> **The decision, in one breath:** **stack B — DigitalOcean Bangalore 1 GB + Supabase Free (Mumbai)
-> ≈ ₹655/mo.** India-resident, **managed** Postgres (so the `CLAUDE.md` rule needs **no override**),
-> **no cloud file storage** (images stay manual → **the droplet is stateless**), **no droplet
-> backups**, images built in **GitHub Actions** (a 1 GB box OOMs on `npm run build`). It fits
-> `BUILD_PLAN.md` §12's ₹500–1,200 estimate. All four owner answers matched 7.1's recommendation.
+> **How to work on it now**
+> ```powershell
+> # dev, unchanged — Docker is still the development environment
+> docker compose up -d
+> docker compose run --rm -v "${PWD}ackend:/app" backend python -m pytest -q       # 327
+> docker compose run --rm -v "${PWD}ackend:/app" backend python -m scripts.e2e_check # 76/76
 >
-> **What 7.3 must actually do:**
-> 0. **Create THREE Supabase login users** (receptionist / dentist / admin, 6.12), copy each UUID
->    into `.env` as `ADMIN_*` / `DENTIST_*` / `RECEPTION_*`, and run `python -m app.seed` — it
->    upserts all three `staff_user` rows. `ADMIN_*` is required; the other two are skipped when
->    blank. The admin holds `["dentist","admin"]` (one person, both roles, one login).
-> 1. **Provision Supabase Postgres in the Mumbai region**, and confirm the free tier's limits at
->    signup — a pricing page and a signup flow don't always agree.
-> 2. **Find out which region the EXISTING Supabase Auth project is in.** This is the one fact 7.2
->    left open. **If it is not Mumbai, recreate it there NOW** — prod starts with an empty DB and
->    there are only 2 logins, so it is nearly free today. ⚠️ **`staff_user.id` IS the Supabase Auth
->    UUID**, so recreating changes the admin's PK and orphans rows referencing it — harmless while
->    the local DB is disposable, ruinous after real patients exist. **That is exactly why it happens
->    before go-live.**
-> 3. **Verify the keep-awake mitigation** (a free Supabase project **pauses after ~1 week idle** —
->    a Diwali closure would mean nobody can sign in on Monday). The theory is that 8.1's UptimeRobot
->    monitor hitting a DB-touching endpoint counts as activity. **That is reasoning, not a tested
->    fact — test it.**
-> 4. **Re-confirm every price before paying.** The figures are 2026-08-06 and cloud pricing moves.
+> # build the installer (needs Rust + `python packaging/fetch_postgres.py` once)
+> python packaging/build.py
+> cd desktop; cargo tauri build
+> ```
 >
-> **Three things NOT to re-litigate** (researched, sourced in the options doc):
-> - **Vercel is disqualified** — the Hobby plan **forbids commercial use** and Vercel may pull a
->   deployment without notice. The 1M-request headroom was real (we need ~48k/mo); the *terms* are
->   the blocker. Pro ($20/mo) costs more than a droplet and still doesn't host the FastAPI backend.
-> - **Hetzner and Neon have no Indian region.** Both are eliminated by residency before cost.
-> - **The DPDP Act does NOT mandate localisation** (negative-list model, no list published; DISHA
->   was never enacted). India residency is a prudential choice, not a legal requirement — it just
->   happens to also be the cheapest one here.
->
-> **The accepted weak point:** Supabase Free has **no managed backups**. A nightly `pg_dump` + an
-> **off-box** copy + a **rehearsed** restore is **real Phase-8 work, not a checkbox** — that is the
-> honest price of the ₹655, and **8.3 gates real patient data on it**. The upgrade trigger most
-> likely to fire is **a failed restore rehearsal**, not running out of space.
->
-> **Still local-only.** Do not add prod compose, domains, TLS or CI deploy before 7.4–7.6.
+> **The one real risk, stated plainly:** everything lives on **one disk in one building**. The
+> nightly backup is automatic, but **getting a copy off the machine is a weekly pen drive** — the
+> weakest link in the whole design. A restore **has been rehearsed** (8.3's gate), so the mechanism
+> works; the habit is what is unproven. See `docs/INSTALL_GUIDE.md`.
 
 **Demo-feedback gate: cleared for now** (asked 2026-08-06, nothing outstanding). Every step from 6.3
 onward came from the owner using the app, so expect more — and changing the schema is still a
@@ -499,6 +475,92 @@ the original step instructions say otherwise:
   something isn't installed.
 - `pytest` must run from `backend/` — `backend/pytest.ini` sets `pythonpath = .` so `app.main`
   imports.
+
+---
+
+## 2026-09-03 — Phase 10: the clinic app becomes a Windows desktop app
+
+**Status:** 10.1–10.6 complete. **327 backend tests** · **76/76 E2E** · lint + build green ·
+**no migration** (head still `d6425ed3d4b5`). A **77 MB installer** exists and has been installed
+and run. **A restore drill has been rehearsed for real.** Ready to ship.
+
+### The scope change that caused all of this
+The clinic went from **2 computers to 1**. The dental assistant now enters the dentist's notes at
+the receptionist's desk. That single fact removed the reason to host anything: **sharing data
+between machines was the requirement a server existed to satisfy.** So Phase 7's ₹655/month cloud
+plan buys capability the clinic will not use, and the app was repackaged to run locally for ₹0.
+
+Research first, in three docs, all kept: `ALTERNATIVE_OPTIONS.md` (the 2-machine LAN option),
+`SINGLE_MACHINE_OPTIONS.md` (this one), and `DEPLOYMENT_DECISION.md` (why cloud was chosen, then
+dropped). **Vercel was ruled out twice on the same grounds — its Hobby plan forbids commercial use.**
+
+### The four decisions that shaped it
+1. **Postgres was KEPT, not migrated to SQLite.** I had implied SQLite was "just the double-booking
+   constraint" — that was wrong, and checking properly is what saved the step. The app also uses
+   Postgres `ARRAY` (roles, investigations), `JSONB` (audit details), **three sequences**
+   (`A-`/`L-`/`V-` numbers) and a **partial index** (the append-only chart). Migrating meant
+   rewriting 5 models, 17 migrations and re-verifying 327 tests. Instead we bundle Postgres's own
+   **zip binaries — which it publishes specifically for inclusion in another installer.** Zero code
+   changes.
+2. **Authentication removed entirely.** Supabase Auth is a *cloud* service: it made an offline app
+   need the internet, and a free project **pauses after a week idle** — a Diwali closure would have
+   locked the clinic out on Monday. **This deliberately reverses 6.12**, built three weeks earlier.
+3. **Reports hidden, not deleted.** On one shared machine a role gate is theatre.
+4. **Tauri is only the window.** No SQLite migration, no business logic in Rust.
+
+### What made the auth removal safe
+`auth.py` is a single choke point, so `require_role` kept its exact signature and now always passes
+— **~20 call sites untouched**. And because a real `staff_user` row is still resolved,
+`audit_log.actor_id`, `visit.dentist_id` and by-dentist reporting all keep working. 36 tests that
+asserted auth behaviour were **deleted, not "fixed"** — they pinned behaviour we removed on purpose.
+Three that a naive grep would have caught were kept: they are real domain rules (archived-patient
+upload, catalogue `kind` immutability, completed-treatment visits).
+
+### Five bugs that only running it could find
+None of these would have failed a test:
+- **A listening port is not readiness.** Postgres binds its port *before* finishing crash recovery,
+  so `createdb` hit "the database system is starting up". Now uses `pg_isready`.
+- **A crash caused by punctuation.** The seed prints an em-dash; Windows console output is cp1252,
+  so decoding raised `UnicodeDecodeError` inside subprocess's reader thread and left `stdout` None.
+  Fixed with `errors="replace"` — and the same class of bug bit again in the `.ps1`, which
+  PowerShell 5.1 reads as ANSI, so that file is now **ASCII-only**.
+- **The installed app launched and silently never came up.** The bundle shipped `launcher.py` but no
+  `launcher.exe`, so the Tauri shell fell back to `python` on PATH — an unrelated Python 3.14 with
+  none of our dependencies. **On the clinic PC there would be no Python at all.** The launcher and
+  the backup tool are both frozen now.
+- **`sys.frozen` cannot tell a built bundle from a dev checkout** (both run unfrozen). Layout is now
+  detected by whether `pgsql/` sits beside the script.
+- **`--add-data` resolves against `--specpath`, not the cwd**, so relative paths silently looked in
+  the wrong folder.
+
+### The restore drill — 8.3's gate, actually cleared
+Not assumed. Backed up, then **truncated every clinical table and emptied the uploads folder**, then
+restored. Verified back: the patient, the chart entry, the **paid** invoice at the right amount, and
+the X-ray's **actual bytes** through the content endpoint — not just its database row.
+
+**The backup archives BOTH the database and the uploads folder**, because 5.6 deliberately keeps
+image bytes on disk with only a `storage_key` in Postgres. Backing up only the database would have
+restored records whose X-rays were all broken links.
+
+### What ships
+`Dental Clinic_0.1.0_x64-setup.exe` (77 MB) → per-user install to `%LOCALAPPDATA%\Dental Clinic`
+(285 MB), no admin. First run ~10s (initdb + migrations), later runs ~4s. Nightly backup at 21:00 as
+a scheduled task — **force-run and verified to succeed unattended**. Data in
+`%LOCALAPPDATA%\ClinicApp` (`pgdata` + `uploads`), untouched by uninstall.
+
+### The honest weak point
+**Everything is on one disk in one building.** The nightly backup is automatic; **getting a copy off
+the machine is a weekly pen drive and is therefore the weakest link in the design.** If that habit
+does not hold, automate it (rclone to Google Drive's free tier) before it matters. The installer is
+also **unsigned**, so SmartScreen warns once — documented in `INSTALL_GUIDE.md`.
+
+### New build-only dependencies
+`pyinstaller`, `pillow` (in `packaging/requirements-build.txt`, deliberately NOT in
+`backend/requirements.txt`), plus **Rust**, needed only to build the installer. `pyjwt`,
+`cryptography` and both `@supabase/*` packages were removed.
+
+### Suggested commit
+`docs: record the desktop app (Phase 10)`
 
 ---
 
