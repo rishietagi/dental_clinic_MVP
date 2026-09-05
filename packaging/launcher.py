@@ -42,7 +42,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 # --- layout ------------------------------------------------------------------
@@ -105,7 +107,22 @@ def database_url() -> str:
 # --- helpers -----------------------------------------------------------------
 
 def log(msg: str) -> None:
-    print(f"[launcher] {msg}", flush=True)
+    """Print a launcher message, safely.
+
+    Windows encoding, third time: `run()` already decodes child output with
+    errors="replace", which can yield U+FFFD. Printing that to a REDIRECTED
+    stdout (a log file, or Tauri capturing the pipe) uses cp1252, which cannot
+    encode it — and an unhandled UnicodeEncodeError here killed the whole
+    launcher. A logging line must never be able to stop the clinic app starting.
+    """
+    line = f"[launcher] {msg}"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        enc = (getattr(sys.stdout, "encoding", None) or "ascii")
+        print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
+    except Exception:  # noqa: BLE001 - never let logging break startup
+        pass
 
 
 def port_open(port: int, host: str = HOST) -> bool:
@@ -335,6 +352,59 @@ def start_frontend() -> subprocess.Popen:
 
 # --- orchestration -----------------------------------------------------------
 
+def backup_done_today() -> bool:
+    """Is there already a backup from today?
+
+    The marker is the backup FILE ITSELF (named clinic-backup-YYYY-MM-DD_HHMM),
+    not a separate stamp file. One less thing to get out of sync: if the backups
+    are deleted, the app correctly decides it needs a new one.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    backups = data_root() / "backups"
+    if not backups.exists():
+        return False
+    return any(p.name.startswith(f"clinic-backup-{today}") for p in backups.glob("*.zip"))
+
+
+def start_daily_backup() -> None:
+    """Back up on the first open of the day, in the background.
+
+    WHY ON STARTUP RATHER THAN ON A TIMER
+        The clinic closes at 4-5pm and the PC goes off, so a 9pm scheduled task
+        almost never ran at 9pm — Windows deferred it to the next morning's boot,
+        competing with everything else starting up. Worse, a backup needs the
+        DATABASE RUNNING, and at 9pm on a closed clinic it is not. Backing up when
+        the app opens means the one moment we know Postgres is up and the machine
+        is in use.
+
+        Opening the app is also the right moment for another reason: it captures
+        yesterday's completed work before today's edits begin.
+
+    Runs at most once a day, and NEVER blocks startup — she should never wait to
+    see the morning's appointments. A failure is logged and otherwise ignored: a
+    missed backup must not stop the clinic from working.
+    """
+    if backup_done_today():
+        log("backup: already done today")
+        return
+
+    exe = app_root() / "backup.exe"
+    cmd = [str(exe)] if exe.exists() else [sys.executable, str(app_root() / "packaging" / "backup.py")]
+
+    def _run() -> None:
+        try:
+            res = run(cmd, cwd=str(app_root()))
+            if res.returncode == 0:
+                log("backup: today's backup written")
+            else:
+                log(f"backup: FAILED (exit {res.returncode}) — {(res.stderr or '').strip()[:200]}")
+        except Exception as exc:  # noqa: BLE001
+            log(f"backup: FAILED — {exc}")
+
+    threading.Thread(target=_run, name="daily-backup", daemon=True).start()
+    log("backup: running in the background")
+
+
 class Stack:
     """Starts the three services and — importantly — stops all of them.
 
@@ -358,6 +428,10 @@ class Stack:
         migrate_and_seed()
         self.procs.append(("backend", start_backend()))
         self.procs.append(("frontend", start_frontend()))
+
+        # Last, so it can never delay the app appearing. Postgres is up by now,
+        # which is the whole reason this belongs here rather than on a timer.
+        start_daily_backup()
 
     def url(self) -> str:
         return f"http://{HOST}:{FRONTEND_PORT}"

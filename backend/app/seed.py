@@ -83,7 +83,10 @@ def seed_local_staff() -> None:
         )
         session.commit()
 
-    print(f"seed: local staff {action} — {email} ({staff_id}) roles={LOCAL_ROLES}")
+    # ASCII only: this line is captured by the launcher and written to a log
+    # file on Windows, where a non-ASCII character has twice caused an encoding
+    # crash (cp1252 on both the decode and the encode side).
+    print(f"seed: local staff {action} - {email} ({staff_id}) roles={LOCAL_ROLES}")
     print("seed: audit_log entry written (action=seed, entity=staff_user)")
 
 

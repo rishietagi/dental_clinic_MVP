@@ -1,75 +1,42 @@
-# Register the nightly backup as a Windows scheduled task (step 10.5).
+# Remove the old nightly backup scheduled task (superseded).
 #
 # ASCII ONLY in this file: Windows PowerShell 5.1 reads .ps1 as ANSI unless the
 # file has a BOM, so a UTF-8 em-dash turns into mojibake and breaks parsing.
 #
 #   powershell -ExecutionPolicy Bypass -File install_backup_task.ps1
-#   powershell -ExecutionPolicy Bypass -File install_backup_task.ps1 -Remove
 #
-# WHY A SCHEDULED TASK AND NOT "REMEMBER TO CLICK BACKUP"
-#   A backup that depends on somebody remembering is not a backup. This runs at
-#   9pm daily whether anyone thinks about it or not, and -RunOnlyIfIdle is NOT
-#   set precisely so a busy machine still gets backed up.
+# THIS SCRIPT NO LONGER INSTALLS ANYTHING. It only cleans up the 9pm task that
+# earlier builds registered.
 #
-#   It runs as the CURRENT USER, at that user's normal privilege - no admin
-#   rights needed, matching the per-user install.
+# WHY THE 9PM TASK WAS WRONG
+#   The clinic closes at 4-5pm and the PC is switched off, so the task almost
+#   never ran at 9pm. -StartWhenAvailable then deferred it to the next morning's
+#   boot, competing with everything else starting up.
 #
-# WHAT IT DOES NOT DO
-#   It does not copy the backup OFF this machine. A backup sitting on the same
-#   disk as the database dies with that disk. Getting a copy off the box is a
-#   separate, manual decision (see docs/INSTALL_GUIDE.md) - deliberately not
-#   automated here, because it needs a destination only the owner can choose.
-
-param(
-    [switch]$Remove,
-    [string]$Time = "21:00"
-)
+#   Worse, and the real defect: a backup needs the DATABASE RUNNING. At 9pm on a
+#   closed clinic, Postgres is not running - so even when the task did fire on a
+#   machine left on, the backup could fail.
+#
+# WHAT REPLACES IT
+#   The app now backs itself up when it is OPENED, at most once a day, in the
+#   background (see start_daily_backup in packaging/launcher.py). That is the one
+#   moment we know the database is up and the machine is in use, and it captures
+#   yesterday's completed work before today's edits begin. Nothing to schedule,
+#   nothing to remember, and nothing to re-register when moving to a new PC.
 
 $ErrorActionPreference = "Stop"
 $TaskName = "Dental Clinic - nightly backup"
 
-if ($Remove) {
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Write-Host "Removed the scheduled task."
-    } else {
-        Write-Host "No scheduled task to remove."
-    }
-    return
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    Write-Host "Removed the old 9pm scheduled task."
+    Write-Host "The app now backs up by itself when it is opened each day."
+} else {
+    Write-Host "No old scheduled task found - nothing to do."
+    Write-Host "The app backs up by itself when it is opened each day."
 }
 
-# The task must point at the INSTALLED backup.exe, not at this script's folder.
-$installRoot = Join-Path $env:LOCALAPPDATA "Dental Clinic"
-$backupExe = Join-Path $installRoot "backup.exe"
-
-if (-not (Test-Path $backupExe)) {
-    Write-Error "backup.exe not found at $backupExe. Install the Dental Clinic app first."
-    exit 1
-}
-
-$action = New-ScheduledTaskAction -Execute $backupExe -WorkingDirectory $installRoot
-$trigger = New-ScheduledTaskTrigger -Daily -At $Time
-
-# StartWhenAvailable: if the PC was off at 9pm, back up when it next starts -
-# a clinic PC is switched off overnight more often than not.
-$settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -DontStopOnIdleEnd `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
-    -MultipleInstances IgnoreNew
-
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Description "Backs up the clinic's database and X-ray files every night." `
-    -Force | Out-Null
-
-Write-Host "Scheduled a nightly backup at $Time."
-Write-Host "  runs:    $backupExe"
-Write-Host "  saves to: $env:LOCALAPPDATA\ClinicApp\backups"
 Write-Host ""
-Write-Host "IMPORTANT: this keeps backups on THIS computer only. If the disk"
-Write-Host "fails you lose the backups too. Copy them to a pen drive or cloud"
-Write-Host "folder regularly - see the install guide."
+Write-Host "REMINDER: backups are still kept on THIS computer only."
+Write-Host "Copy the newest file from %LOCALAPPDATA%\ClinicApp\backups to a pen"
+Write-Host "drive or cloud folder every week - see the install guide."
