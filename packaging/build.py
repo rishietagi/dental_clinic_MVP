@@ -204,6 +204,31 @@ def build_backup_tool() -> None:
     log(f"backup tool -> {DIST / 'backup.exe'}")
 
 
+def build_diagnostic() -> None:
+    """Freeze the diagnostic into diagnose.exe.
+
+    Ships with the app because the whole point is to run on a machine I cannot
+    reach, that has no Python and no dev tools. "Internal server error" is not a
+    diagnosis; this turns it into one.
+    """
+    log("building diagnostic executable (PyInstaller)")
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--name", "diagnose",
+        "--onefile",
+        "--distpath", str(DIST),
+        "--workpath", str(ROOT / "build" / "pyinstaller-diagnose"),
+        "--specpath", str(ROOT / "build"),
+        "--console",
+        "--paths", str(ROOT / "packaging"),
+        "--hidden-import", "launcher",
+        str(ROOT / "packaging" / "diagnose.py"),
+    ]
+    run(cmd, cwd=ROOT)
+    log(f"diagnostic -> {DIST / 'diagnose.exe'}")
+
+
 def copy_postgres() -> None:
     src = ROOT / "pgsql"
     if not src.exists():
@@ -245,9 +270,11 @@ def main() -> int:
     if args.launcher:
         build_launcher()
         build_backup_tool()
+        build_diagnostic()
     if everything:
         build_launcher()
         build_backup_tool()
+        build_diagnostic()
         copy_postgres()
         copy_node()
 
