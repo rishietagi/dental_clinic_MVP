@@ -8,7 +8,9 @@ export function PageHeader({
   action,
 }: {
   title: string;
-  subtitle?: string;
+  // ReactNode, not string: the dashboard passes a live client component so its
+  // date re-evaluates in the browser rather than freezing in a cached render.
+  subtitle?: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (

@@ -478,6 +478,52 @@ the original step instructions say otherwise:
 
 ---
 
+## 2026-09-05 — 10.7: first real-install fixes
+
+**Status:** complete. Found by the owner actually using it on the clinic laptop —
+neither bug could have been caught by a test on the dev machine.
+
+### The dashboard date froze
+The heading said "Thursday, 3 September" above a correct list of TODAY's
+appointments. `app/page.tsx` is a **server component**, so its `new Date()` ran on
+the Node server at render time and Next.js cached that render. In the packaged app
+the server starts once and serves that cache forever, so the heading froze on
+whatever date the app first rendered — while every list below it, which fetches in
+the browser, stayed correct. **A server-rendered "today" is a bug in a
+long-running local app.**
+
+Fixed by extracting `app/dashboard-date.tsx` as a client component, formatting in
+the **clinic timezone** (the 4.9 rule, matching `todayIso` and the worklists rather
+than the browser's zone), with a one-minute ticker so an app left open overnight
+rolls over. The label is **derived on render, not stored in state** — lint caught
+the first attempt under this repo's set-state-in-effect rule. `PageHeader.subtitle`
+widened from `string` to `ReactNode`.
+
+### A 500 on saving a patient, cause never confirmed
+Registering a patient failed with an internal server error on the clinic laptop,
+then stopped reproducing. **Never diagnosed** — worth stating plainly rather than
+claiming a fix. `get_current_staff` returns **500** (not 4xx) when the local staff
+row is missing or inactive, and every write goes through it, which reproduces the
+exact symptom; that remains the best hypothesis but is unproven for that machine.
+
+That guesswork across two cities is what produced the real deliverable:
+**`diagnose.exe`** (`packaging/diagnose.py`), shipped with the app. It reports the
+concrete state of the files, the three services, the schema, the staff row and a
+rolled-back write test, and `--fix` repairs the staff row. Read-only otherwise.
+Written because "internal server error" is not a diagnosis and the machine is in
+another city.
+
+### Also
+The installer works from a **non-default location** (the owner installed to
+`D:\Dental Clinic`); no tool hardcodes the install path. Data still lives in
+`%LOCALAPPDATA%\ClinicApp` regardless — backing up the install folder does NOT
+back up the records.
+
+### Suggested commit
+`fix: render the dashboard date in the browser, add a diagnostic tool`
+
+---
+
 ## 2026-09-03 — Phase 10: the clinic app becomes a Windows desktop app
 
 **Status:** 10.1–10.6 complete. **327 backend tests** · **76/76 E2E** · lint + build green ·

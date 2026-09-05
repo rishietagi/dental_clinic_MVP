@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CalendarPlus, UserPlus } from "lucide-react";
 
+import { DashboardDate } from "./dashboard-date";
 import { HealthCard } from "./health-card";
 import { LabDashboardCard } from "./lab-dashboard";
 import { NeedsFollowUp } from "./needs-follow-up";
@@ -17,16 +18,9 @@ import { PageHeader } from "@/components/page-header";
 // provides the header, nav, and <main> now, so this page is just its sections.
 // The proxy guard guarantees only signed-in users reach here.
 export default function Home() {
-  const todayLabel = new Date().toLocaleDateString([], {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Dashboard" subtitle={todayLabel} />
+      <PageHeader title="Dashboard" subtitle={<DashboardDate />} />
 
       {/* Primary actions: big, centred, colour-shift on hover. */}
       <div className="flex flex-col justify-center gap-4 sm:flex-row">
